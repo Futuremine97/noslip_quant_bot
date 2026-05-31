@@ -573,6 +573,55 @@ def trigger_trade(symbol, current_price, M, X, V, H, SL, TP, strategy):
         """, (symbol, int(now), current_price, M, X, V, H, SL, TP, strategy, datetime.now(timezone.utc).isoformat()))
         conn.commit()
 
+def check_consensus_for_signal(symbol: str, strategy: str) -> tuple:
+    """
+    Run 6-agent consensus check for technical buy signals.
+    Returns (is_approved, consensus_badge_text).
+    """
+    try:
+        yf_symbol = symbol.replace("USDT", "-USD")
+        from telegram_interactive_bot import run_consensus_analysis
+        
+        print(f"🔍 [Consensus Check] Running consensus committee for {symbol} ({strategy})...")
+        res = run_consensus_analysis(yf_symbol)
+        if "error" in res:
+            print(f"⚠️ [Consensus Check Error] {res['error']}")
+            return False, ""
+            
+        consensus_pct = res.get("consensus_pct", 0.0)
+        votes = res.get("votes", {})
+        
+        macro_vote = votes.get("macro", ("HOLD", ""))[0]
+        trend_vote = votes.get("trend", ("HOLD", ""))[0]
+        value_vote = votes.get("value", ("HOLD", ""))[0]
+        whale_vote = votes.get("whale", ("HOLD", ""))[0]
+        mr_vote = votes.get("mean_reversion", ("HOLD", ""))[0]
+        clucmay_vote = votes.get("clucmay", ("HOLD", ""))[0]
+        
+        def get_vote_emoji(v):
+            return "🟢" if v == "BUY" else ("🔴" if v == "SELL" else "🟡")
+            
+        consensus_badge = (
+            f"🛡️ <b>6인 위원회 승인 완료 (합의지수: {consensus_pct:+.1f}%)</b>\n"
+            f"  • {get_vote_emoji(macro_vote)} 매크로: <b>{macro_vote}</b> | "
+            f"{get_vote_emoji(trend_vote)} 추세: <b>{trend_vote}</b> | "
+            f"{get_vote_emoji(value_vote)} 가치: <b>{value_vote}</b>\n"
+            f"  • {get_vote_emoji(whale_vote)} 수급: <b>{whale_vote}</b> | "
+            f"{get_vote_emoji(mr_vote)} RSI: <b>{mr_vote}</b> | "
+            f"{get_vote_emoji(clucmay_vote)} ClucMay: <b>{clucmay_vote}</b>"
+        )
+        
+        if consensus_pct > 15.0:
+            print(f"✅ [Consensus Approved] {symbol} {strategy} approved! Score: {consensus_pct:+.1f}%")
+            return True, consensus_badge
+        else:
+            print(f"❌ [Consensus Bypassed] {symbol} {strategy} rejected (Score: {consensus_pct:+.1f}% <= 15.0%)")
+            return False, ""
+            
+    except Exception as e:
+        print(f"⚠️ [Consensus Check Exception] {e}")
+        return False, ""
+
 def check_signals_for_symbol(symbol: str, config: dict):
     symbol_config = config.get(symbol, {})
     if not symbol_config:
@@ -639,32 +688,35 @@ def check_signals_for_symbol(symbol: str, config: dict):
     if price_change >= X and vol_ratio >= V:
         last_alert = last_alert_times.get((symbol, strategy_whale), 0)
         if now - last_alert >= ALERT_COOLDOWN_SECONDS:
-            last_alert_times[(symbol, strategy_whale)] = now
-            trigger_trade(symbol, current_price, M, X, vol_ratio, H_whale, SL_whale, TP_whale, strategy_whale)
-            
-            tp_price = current_price * (1.0 + TP_whale / 100.0)
-            sl_price = current_price * (1.0 - SL_whale / 100.0)
-            emoji = "🐳" if display_sym in ["BTC", "ETH"] else "⚡"
-            
-            lines = [
-                f"{emoji} <b>[No Slip Whale] 고래 수급 유입 포착 ({display_sym})</b>",
-                "=" * 40,
-                f"🔥 <b>{display_sym} 실시간 급등 감지</b>",
-                f"  • 현재가: ${current_price:,.2f}",
-                f"  • <b>진입 사유</b>: {M}분 전 가격 대비 +{price_change:.2f}% 급등 (기준 {X}%) 및 거래량이 30분 평균 대비 {vol_ratio:.1f}배 급증 (기준 {V}x)",
-                f"  • <b>매매 전략</b>: 고래 수급 추격 매수 전략 (Whale Momentum Breakout)",
-                f"  • <b>핵심 근거</b>: 거래량이 동반된 단기 주가 폭증은 세력(고래)의 대규모 시장가 매집 신호이며, 단기 추세 상승 지속 가능성이 극대화되는 타점입니다.",
-                "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
-                f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
-                f"  • <b>익절 목표가 (+{TP_whale}%)</b>: ${tp_price:,.2f}",
-                f"  • <b>손절 가격 (-{SL_whale}%)</b>: ${sl_price:,.2f}",
-                f"  • <b>추천 보유 시간</b>: 최대 {H_whale}분",
-                "\n💡 <b>알림 해석 가이드</b>",
-                "• 갑작스러운 가격 상승과 거래량 동반은 고래가 대규모 시장가 주문을 집행한 신호입니다. 수치와 배수가 높을수록 돌파 성공률이 높습니다.",
-                "\n" + "=" * 40,
-                f"※ 본 알림은 1분 단위 고래 거래량 급증 포착 알고리즘에 의해 발송됩니다."
-            ]
-            send_telegram_message("\n".join(lines))
+            is_approved, consensus_badge = check_consensus_for_signal(symbol, strategy_whale)
+            if is_approved:
+                last_alert_times[(symbol, strategy_whale)] = now
+                trigger_trade(symbol, current_price, M, X, vol_ratio, H_whale, SL_whale, TP_whale, strategy_whale)
+                
+                tp_price = current_price * (1.0 + TP_whale / 100.0)
+                sl_price = current_price * (1.0 - SL_whale / 100.0)
+                emoji = "🐳" if display_sym in ["BTC", "ETH"] else "⚡"
+                
+                lines = [
+                    f"{emoji} <b>[No Slip Whale] 고래 수급 유입 포착 ({display_sym})</b>",
+                    "=" * 40,
+                    f"🔥 <b>{display_sym} 실시간 급등 감지</b>",
+                    f"  • 현재가: ${current_price:,.2f}",
+                    f"  • <b>진입 사유</b>: {M}분 전 가격 대비 +{price_change:.2f}% 급등 (기준 {X}%) 및 거래량이 30분 평균 대비 {vol_ratio:.1f}배 급증 (기준 {V}x)",
+                    f"  • <b>매매 전략</b>: 고래 수급 추격 매수 전략 (Whale Momentum Breakout)",
+                    f"  • <b>핵심 근거</b>: 거래량이 동반된 단기 주가 폭증은 세력(고래)의 대규모 시장가 매집 신호이며, 단기 추세 상승 지속 가능성이 극대화되는 타점입니다.",
+                    f"\n{consensus_badge}",
+                    "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
+                    f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
+                    f"  • <b>익절 목표가 (+{TP_whale}%)</b>: ${tp_price:,.2f}",
+                    f"  • <b>손절 가격 (-{SL_whale}%)</b>: ${sl_price:,.2f}",
+                    f"  • <b>추천 보유 시간</b>: 최대 {H_whale}분",
+                    "\n💡 <b>알림 해석 가이드</b>",
+                    "• 갑작스러운 가격 상승과 거래량 동반은 고래가 대규모 시장가 주문을 집행한 신호입니다. 수치와 배수가 높을수록 돌파 성공률이 높습니다.",
+                    "\n" + "=" * 40,
+                    f"※ 본 알림은 1분 단위 고래 거래량 급증 포착 알고리즘에 의해 발송됩니다."
+                ]
+                send_telegram_message("\n".join(lines))
             
     # ------------------ Strategy 2: RSI Reversion ------------------
     strategy_rsi = "rsi_reversion"
@@ -680,31 +732,34 @@ def check_signals_for_symbol(symbol: str, config: dict):
     if (curr_rsi < rsi_trigger) and (curr_rsi > prev_rsi):
         last_alert = last_alert_times.get((symbol, strategy_rsi), 0)
         if now - last_alert >= ALERT_COOLDOWN_SECONDS:
-            last_alert_times[(symbol, strategy_rsi)] = now
-            trigger_trade(symbol, current_price, 0, rsi_trigger, curr_rsi, H_rsi, SL_rsi, TP_rsi, strategy_rsi)
-            
-            tp_price = current_price * (1.0 + TP_rsi / 100.0)
-            sl_price = current_price * (1.0 - SL_rsi / 100.0)
-            
-            lines = [
-                f"🟢 <b>[No Slip RSI] 과매도 반등 시그널 포착 ({display_sym})</b>",
-                "=" * 40,
-                f"📈 <b>{display_sym} 과매도 권역 반등 감지</b>",
-                f"  • 현재가: ${current_price:,.2f}",
-                f"  • <b>진입 사유</b>: RSI(14)가 {curr_rsi:.1f}로 과매도 기준치인 {rsi_trigger} 이하로 급락 후 상승 전환 반등 (직전 RSI: {prev_rsi:.1f})",
-                f"  • <b>매매 전략</b>: RSI 과매도 회귀 전략 (RSI Mean Reversion)",
-                f"  • <b>핵심 근거</b>: 주가가 과매도 국면에 접어든 상태에서 저점 매수세가 유입되어 RSI가 상승 반전하는 것은 하락세가 진정되고 기술적 반등이 개시되는 대표적인 전환 타점입니다.",
-                "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
-                f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
-                f"  • <b>익절 목표가 (+{TP_rsi}%)</b>: ${tp_price:,.2f}",
-                f"  • <b>손절 가격 (-{SL_rsi}%)</b>: ${sl_price:,.2f}",
-                f"  • <b>추천 보유 시간</b>: 최대 {H_rsi}분",
-                "\n💡 <b>알림 해석 가이드</b>",
-                "• RSI 과매도 구간(일반적으로 30 이하)에서의 주가 반등은 단기 투매 진정 및 저가 매수세 유입을 뜻하며, 높은 확률로 단기 기술적 반등을 이끌어냅니다.",
-                "\n" + "=" * 40,
-                f"※ 본 알림은 1분 단위 RSI 과매도 회귀 포착 알고리즘에 의해 발송됩니다."
-            ]
-            send_telegram_message("\n".join(lines))
+            is_approved, consensus_badge = check_consensus_for_signal(symbol, strategy_rsi)
+            if is_approved:
+                last_alert_times[(symbol, strategy_rsi)] = now
+                trigger_trade(symbol, current_price, 0, rsi_trigger, curr_rsi, H_rsi, SL_rsi, TP_rsi, strategy_rsi)
+                
+                tp_price = current_price * (1.0 + TP_rsi / 100.0)
+                sl_price = current_price * (1.0 - SL_rsi / 100.0)
+                
+                lines = [
+                    f"🟢 <b>[No Slip RSI] 과매도 반등 시그널 포착 ({display_sym})</b>",
+                    "=" * 40,
+                    f"📈 <b>{display_sym} 과매도 권역 반등 감지</b>",
+                    f"  • 현재가: ${current_price:,.2f}",
+                    f"  • <b>진입 사유</b>: RSI(14)가 {curr_rsi:.1f}로 과매도 기준치인 {rsi_trigger} 이하로 급락 후 상승 전환 반등 (직전 RSI: {prev_rsi:.1f})",
+                    f"  • <b>매매 전략</b>: RSI 과매도 회귀 전략 (RSI Mean Reversion)",
+                    f"  • <b>핵심 근거</b>: 주가가 과매도 국면에 접어든 상태에서 저점 매수세가 유입되어 RSI가 상승 반전하는 것은 하락세가 진정되고 기술적 반등이 개시되는 대표적인 전환 타점입니다.",
+                    f"\n{consensus_badge}",
+                    "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
+                    f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
+                    f"  • <b>익절 목표가 (+{TP_rsi}%)</b>: ${tp_price:,.2f}",
+                    f"  • <b>손절 가격 (-{SL_rsi}%)</b>: ${sl_price:,.2f}",
+                    f"  • <b>추천 보유 시간</b>: 최대 {H_rsi}분",
+                    "\n💡 <b>알림 해석 가이드</b>",
+                    "• RSI 과매도 구간(일반적으로 30 이하)에서의 주가 반등은 단기 투매 진정 및 저가 매수세 유입을 뜻하며, 높은 확률로 단기 기술적 반등을 이끌어냅니다.",
+                    "\n" + "=" * 40,
+                    f"※ 본 알림은 1분 단위 RSI 과매도 회귀 포착 알고리즘에 의해 발송됩니다."
+                ]
+                send_telegram_message("\n".join(lines))
 
     # ------------------ Strategy 3: MACD Crossover ------------------
     strategy_macd = "macd_crossover"
@@ -724,31 +779,34 @@ def check_signals_for_symbol(symbol: str, config: dict):
     if (prev_macd <= prev_signal) and (curr_macd > curr_signal) and (vol_ratio_macd >= vol_confirm):
         last_alert = last_alert_times.get((symbol, strategy_macd), 0)
         if now - last_alert >= ALERT_COOLDOWN_SECONDS:
-            last_alert_times[(symbol, strategy_macd)] = now
-            trigger_trade(symbol, current_price, 0, vol_confirm, vol_ratio_macd, H_macd, SL_macd, TP_macd, strategy_macd)
-            
-            tp_price = current_price * (1.0 + TP_macd / 100.0)
-            sl_price = current_price * (1.0 - SL_macd / 100.0)
-            
-            lines = [
-                f"🚀 <b>[No Slip MACD] 골든크로스 상승 전환 포착 ({display_sym})</b>",
-                "=" * 40,
-                f"📈 <b>{display_sym} 추세 상승 반전 감지</b>",
-                f"  • 현재가: ${current_price:,.2f}",
-                f"  • <b>진입 사유</b>: MACD 지표선({curr_macd:.4f})이 Signal선({curr_signal:.4f})을 골든크로스 돌파 및 거래량 {vol_ratio_macd:.1f}배 동반(기준 {vol_confirm}x)",
-                f"  • <b>매매 전략</b>: MACD 추세 추종 돌파 전략 (MACD Momentum Follower)",
-                f"  • <b>핵심 근거</b>: MACD 골든크로스는 중단기 하락 추세가 상승으로 복귀하는 강력한 전환점이며, 거래량 증가가 동반되어 휩소(가짜 돌파) 가능성이 최소화된 타점입니다.",
-                "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
-                f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
-                f"  • <b>익절 목표가 (+{TP_macd}%)</b>: ${tp_price:,.2f}",
-                f"  • <b>손절 가격 (-{SL_macd}%)</b>: ${sl_price:,.2f}",
-                f"  • <b>추천 보유 시간</b>: 최대 {H_macd}분",
-                "\n💡 <b>알림 해석 가이드</b>",
-                "• MACD 골든크로스는 중단기 추세가 하락에서 상승으로 공식 전환됨을 나타내며, 수급(거래량)의 증가와 수평 결합될 때 신뢰도가 극대화됩니다.",
-                "\n" + "=" * 40,
-                f"※ 본 알림은 1분 단위 MACD Golden Cross 포착 알고리즘에 의해 발송됩니다."
-            ]
-            send_telegram_message("\n".join(lines))
+            is_approved, consensus_badge = check_consensus_for_signal(symbol, strategy_macd)
+            if is_approved:
+                last_alert_times[(symbol, strategy_macd)] = now
+                trigger_trade(symbol, current_price, 0, vol_confirm, vol_ratio_macd, H_macd, SL_macd, TP_macd, strategy_macd)
+                
+                tp_price = current_price * (1.0 + TP_macd / 100.0)
+                sl_price = current_price * (1.0 - SL_macd / 100.0)
+                
+                lines = [
+                    f"🚀 <b>[No Slip MACD] 골든크로스 상승 전환 포착 ({display_sym})</b>",
+                    "=" * 40,
+                    f"📈 <b>{display_sym} 추세 상승 반전 감지</b>",
+                    f"  • 현재가: ${current_price:,.2f}",
+                    f"  • <b>진입 사유</b>: MACD 지표선({curr_macd:.4f})이 Signal선({curr_signal:.4f})을 골든크로스 돌파 및 거래량 {vol_ratio_macd:.1f}배 동반(기준 {vol_confirm}x)",
+                    f"  • <b>매매 전략</b>: MACD 추세 추종 돌파 전략 (MACD Momentum Follower)",
+                    f"  • <b>핵심 근거</b>: MACD 골든크로스는 중단기 하락 추세가 상승으로 복귀하는 강력한 전환점이며, 거래량 증가가 동반되어 휩소(가짜 돌파) 가능성이 최소화된 타점입니다.",
+                    f"\n{consensus_badge}",
+                    "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
+                    f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
+                    f"  • <b>익절 목표가 (+{TP_macd}%)</b>: ${tp_price:,.2f}",
+                    f"  • <b>손절 가격 (-{SL_macd}%)</b>: ${sl_price:,.2f}",
+                    f"  • <b>추천 보유 시간</b>: 최대 {H_macd}분",
+                    "\n💡 <b>알림 해석 가이드</b>",
+                    "• MACD 골든크로스는 중단기 추세가 하락에서 상승으로 공식 전환됨을 나타내며, 수급(거래량)의 증가와 수평 결합될 때 신뢰도가 극대화됩니다.",
+                    "\n" + "=" * 40,
+                    f"※ 본 알림은 1분 단위 MACD Golden Cross 포착 알고리즘에 의해 발송됩니다."
+                ]
+                send_telegram_message("\n".join(lines))
 
     # ------------------ Strategy 4: Bollinger Band Breakout ------------------
     strategy_bb = "bb_breakout"
@@ -771,31 +829,34 @@ def check_signals_for_symbol(symbol: str, config: dict):
     if is_squeezed and is_breakout:
         last_alert = last_alert_times.get((symbol, strategy_bb), 0)
         if now - last_alert >= ALERT_COOLDOWN_SECONDS:
-            last_alert_times[(symbol, strategy_bb)] = now
-            trigger_trade(symbol, current_price, 0, squeeze_ratio, curr_bandwidth, H_bb, SL_bb, TP_bb, strategy_bb)
-            
-            tp_price = current_price * (1.0 + TP_bb / 100.0)
-            sl_price = current_price * (1.0 - SL_bb / 100.0)
-            
-            lines = [
-                f"💥 <b>[No Slip BB] 변동성 수축 돌파 포착 ({display_sym})</b>",
-                "=" * 40,
-                f"📈 <b>{display_sym} 볼린저 밴드 상단 돌파</b>",
-                f"  • 현재가: ${current_price:,.2f}",
-                f"  • <b>진입 사유</b>: 볼린저 밴드 대역폭(Bandwidth)이 {curr_bandwidth*100:.2f}%로 30분 최저치 대비 수축 조건({squeeze_ratio:.2f}x) 충족 후 종가가 상단 밴드(${curr_upper:,.2f}) 돌파",
-                f"  • <b>매매 전략</b>: 볼린저 밴드 수축 및 밴드상단 돌파 전략 (BB Squeeze Breakout)",
-                f"  • <b>핵심 근거</b>: 횡보로 인해 밴드가 극도로 수축한 것은 시세 분출 에너지가 응축되었음을 의미하며, 이 상태에서 밴드 상단 돌파는 강력한 방향성 랠리의 신호탄입니다.",
-                "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
-                f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
-                f"  • <b>익절 목표가 (+{TP_bb}%)</b>: ${tp_price:,.2f}",
-                f"  • <b>손절 가격 (-{SL_bb}%)</b>: ${sl_price:,.2f}",
-                f"  • <b>추천 보유 시간</b>: 최대 {H_bb}분",
-                "\n💡 <b>알림 해석 가이드</b>",
-                "• 주가가 오랜 횡보를 거치며 볼린저 밴드가 극도로 수축한 후(Squeeze), 밴드 상단 돌파는 강력한 새 추세 랠리의 시작점(Breakout) 역할을 합니다.",
-                "\n" + "=" * 40,
-                f"※ 본 알림은 1분 단위 Bollinger Band Squeeze 돌파 포착 알고리즘에 의해 발송됩니다."
-            ]
-            send_telegram_message("\n".join(lines))
+            is_approved, consensus_badge = check_consensus_for_signal(symbol, strategy_bb)
+            if is_approved:
+                last_alert_times[(symbol, strategy_bb)] = now
+                trigger_trade(symbol, current_price, 0, squeeze_ratio, curr_bandwidth, H_bb, SL_bb, TP_bb, strategy_bb)
+                
+                tp_price = current_price * (1.0 + TP_bb / 100.0)
+                sl_price = current_price * (1.0 - SL_bb / 100.0)
+                
+                lines = [
+                    f"💥 <b>[No Slip BB] 변동성 수축 돌파 포착 ({display_sym})</b>",
+                    "=" * 40,
+                    f"📈 <b>{display_sym} 볼린저 밴드 상단 돌파</b>",
+                    f"  • 현재가: ${current_price:,.2f}",
+                    f"  • <b>진입 사유</b>: 볼린저 밴드 대역폭(Bandwidth)이 {curr_bandwidth*100:.2f}%로 30분 최저치 대비 수축 조건({squeeze_ratio:.2f}x) 충족 후 종가가 상단 밴드(${curr_upper:,.2f}) 돌파",
+                    f"  • <b>매매 전략</b>: 볼린저 밴드 수축 및 밴드상단 돌파 전략 (BB Squeeze Breakout)",
+                    f"  • <b>핵심 근거</b>: 횡보로 인해 밴드가 극도로 수축한 것은 시세 분출 에너지가 응축되었음을 의미하며, 이 상태에서 밴드 상단 돌파는 강력한 방향성 랠리의 신호탄입니다.",
+                    f"\n{consensus_badge}",
+                    "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
+                    f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
+                    f"  • <b>익절 목표가 (+{TP_bb}%)</b>: ${tp_price:,.2f}",
+                    f"  • <b>손절 가격 (-{SL_bb}%)</b>: ${sl_price:,.2f}",
+                    f"  • <b>추천 보유 시간</b>: 최대 {H_bb}분",
+                    "\n💡 <b>알림 해석 가이드</b>",
+                    "• 주가가 오랜 횡보를 거치며 볼린저 밴드가 극도로 수축한 후(Squeeze), 밴드 상단 돌파는 강력한 새 추세 랠리의 시작점(Breakout) 역할을 합니다.",
+                    "\n" + "=" * 40,
+                    f"※ 본 알림은 1분 단위 Bollinger Band Squeeze 돌파 포착 알고리즘에 의해 발송됩니다."
+                ]
+                send_telegram_message("\n".join(lines))
 
     # ------------------ Strategy 5: Spot Exchange Arbitrage ------------------
     strategy_spot_arb = "spot_arbitrage"
