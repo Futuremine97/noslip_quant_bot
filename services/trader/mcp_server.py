@@ -177,6 +177,33 @@ def main():
                               },
                               "required": ["concept_name"]
                             }
+                          },
+                          {
+                            "name": "submit_prophet_leaderboard",
+                            "description": "Submit all local Prophet champion forecasting model metrics to the central shared leaderboard.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "bot_id": {
+                                  "type": "string",
+                                  "description": "Unique identifier/name for your bot (e.g. 'Futuremine97_bot')."
+                                }
+                              },
+                              "required": ["bot_id"]
+                            }
+                          },
+                          {
+                            "name": "view_prophet_leaderboard",
+                            "description": "Fetch the shared global Prophet leaderboard standings from the central server.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "symbol": {
+                                  "type": "string",
+                                  "description": "Optional asset symbol to filter by (e.g. 'BTC-USD')."
+                                }
+                              }
+                            }
                           }
                         ]
                     }
@@ -238,6 +265,21 @@ def main():
                     
                     from personal_ontology import evaluate_ontology_concept
                     result_text = evaluate_ontology_concept(user_id, concept_name)
+                    
+                elif tool_name == "submit_prophet_leaderboard":
+                    bot_id = arguments.get("bot_id")
+                    if not bot_id:
+                        raise ValueError("Missing bot_id argument")
+                    
+                    from leaderboard_sync import sync_local_champions_to_leaderboard
+                    res_dict = sync_local_champions_to_leaderboard(bot_id)
+                    result_text = f"📊 Submission results for bot '{bot_id}':\n\n" + json.dumps(res_dict, indent=2, ensure_ascii=False)
+                    
+                elif tool_name == "view_prophet_leaderboard":
+                    symbol = arguments.get("symbol")
+                    
+                    from leaderboard_sync import fetch_leaderboard_report
+                    result_text = fetch_leaderboard_report(symbol)
                     
                 else:
                     raise ValueError(f"Unknown tool: {tool_name}")

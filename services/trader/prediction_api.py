@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 
 import contextlib
 import io
@@ -80,6 +81,39 @@ class PredictionRequest(BaseModel):
     trackHumanBias: bool = False
     humanBiasSource: Optional[str] = None
     data: List[ProphetRow] = []
+
+
+class LeaderboardSubmission(BaseModel):
+    bot_id: str
+    symbol: str
+    mae: float
+    rmse: float
+    directional_accuracy: float
+    composite_score: float
+    cv_folds: int
+    updated_at: str
+
+
+LEADERBOARD_DB_PATH = ROOT_DIR / "services" / "trader" / "model_cache" / "prophet_leaderboard.sqlite3"
+
+def init_leaderboard_db():
+    LEADERBOARD_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+    with sqlite3.connect(LEADERBOARD_DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS prophet_leaderboard (
+                bot_id TEXT,
+                symbol TEXT,
+                mae REAL,
+                rmse REAL,
+                directional_accuracy REAL,
+                composite_score REAL,
+                cv_folds INTEGER,
+                updated_at TEXT,
+                PRIMARY KEY (bot_id, symbol)
+            )
+        """)
+        conn.commit()
 
 
 app = FastAPI(title="No Slip Prediction API")
@@ -369,6 +403,82 @@ def build_result(
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+@app.post("/leaderboard/submit")
+def submit_leaderboard_score(
+    submission: LeaderboardSubmission,
+    authorization: Optional[str] = Header(default=None)
+) -> dict:
+    require_authorization(authorization)
+    init_leaderboard_db()
+    
+    import sqlite3
+    with sqlite3.connect(LEADERBOARD_DB_PATH) as conn:
+        conn.execute("""
+            INSERT INTO prophet_leaderboard (bot_id, symbol, mae, rmse, directional_accuracy, composite_score, cv_folds, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bot_id, symbol) DO UPDATE SET
+                mae = excluded.mae,
+                rmse = excluded.rmse,
+                directional_accuracy = excluded.directional_accuracy,
+                composite_score = excluded.composite_score,
+                cv_folds = excluded.cv_folds,
+                updated_at = excluded.updated_at
+        """, (
+            submission.bot_id,
+            submission.symbol.upper().strip(),
+            submission.mae,
+            submission.rmse,
+            submission.directional_accuracy,
+            submission.composite_score,
+            submission.cv_folds,
+            submission.updated_at
+        ))
+        conn.commit()
+        
+    return {"ok": True, "message": f"Successfully registered score for {submission.symbol} by {submission.bot_id}"}
+
+
+@app.get("/leaderboard")
+def get_leaderboard(
+    symbol: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None)
+) -> dict:
+    require_authorization(authorization)
+    init_leaderboard_db()
+    
+    import sqlite3
+    with sqlite3.connect(LEADERBOARD_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        if symbol:
+            rows = conn.execute("""
+                SELECT bot_id, symbol, mae, rmse, directional_accuracy, composite_score, cv_folds, updated_at
+                FROM prophet_leaderboard
+                WHERE symbol = ?
+                ORDER BY composite_score ASC
+            """, (symbol.upper().strip(),)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT bot_id, symbol, mae, rmse, directional_accuracy, composite_score, cv_folds, updated_at
+                FROM prophet_leaderboard
+                ORDER BY symbol ASC, composite_score ASC
+            """).fetchall()
+            
+    leaderboard = []
+    for r in rows:
+        leaderboard.append({
+            "bot_id": r["bot_id"],
+            "symbol": r["symbol"],
+            "mae": r["mae"],
+            "rmse": r["rmse"],
+            "directional_accuracy": r["directional_accuracy"],
+            "composite_score": r["composite_score"],
+            "cv_folds": r["cv_folds"],
+            "updated_at": r["updated_at"]
+        })
+        
+    return {"ok": True, "leaderboard": leaderboard}
 
 
 @app.get("/reinforcement-state")
