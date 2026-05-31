@@ -1,0 +1,39 @@
+{
+  "name": "noslip",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:sp500": "NEXT_PUBLIC_SP500_ONLY=true next dev",
+    "build": "next build",
+    "build:sp500": "NEXT_PUBLIC_SP500_ONLY=true next build",
+    "start": "next start",
+    "server": "node server/index.js",
+    "lint": "eslint",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tosspayments/payment-sdk": "^1.9.2",
+    "autoprefixer": "^10.4.27",
+    "axios": "^1.15.2",
+    "next": "16.2.6",
+    "postcss": "^8.5.10",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "overrides": {
+    "follow-redirects": "1.16.0",
+    "postcss": "$postcss"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.2",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.6",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5",
+    "vitest": "^4.1.4"
+  }
+}

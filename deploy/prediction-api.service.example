@@ -1,0 +1,15 @@
+[Unit]
+Description=No Slip Prophet Prediction API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/no-slip
+EnvironmentFile=/etc/no-slip/prediction-api.env
+ExecStart=/home/ubuntu/no-slip/services/trader/.venv/bin/uvicorn services.trader.prediction_api:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
