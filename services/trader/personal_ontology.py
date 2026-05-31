@@ -176,7 +176,20 @@ def evaluate_ontology_concept(user_id: str, concept_name: str) -> str:
                 info_x = coords.get("x")
                 info_y = coords.get("y")
             final_action = map_point.get("finalAction")
-            
+
+        # Fallback: if expected_action is required but the static S&P 500 info map
+        # has no finalAction for this symbol (e.g. crypto / small-caps), compute it
+        # live via the same 6-agent consensus engine analyze_ticker uses.
+        if final_action is None and "expected_action" in rules:
+            try:
+                from telegram_interactive_bot import run_consensus_analysis
+                res = run_consensus_analysis(norm_sym)
+                if "error" not in res:
+                    pct = res["consensus_pct"]
+                    final_action = "BUY" if pct > 15.0 else ("SELL" if pct < -15.0 else "HOLD")
+            except Exception:
+                pass
+
         # Rules audit check
         passed_rules = []
         failed_rules = []
