@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 import json
+
 import os
 import sys
 import time
@@ -616,14 +618,13 @@ def normalize_symbol(query: str) -> str:
 
 # ----------------- Core Logic Handlers -----------------
 
-def execute_analysis(symbol: str) -> str:
-    """Fetch live data and run the 6-agent consensus suite for the symbol."""
+def run_consensus_analysis(symbol: str) -> dict:
+    """Fetch live data and run the 6-agent consensus suite for the symbol returning raw values."""
     import yfinance as yf
     
-    # Check if ticker exists by pulling 60 days
     df = fetch_ticker_data(symbol)
     if df.empty or len(df) < 50:
-        return f"⚠️ <b>{symbol}</b> 종목을 찾을 수 없거나 데이터 조회에 실패했습니다. (yfinance 지원 티커인지 확인해 주세요.)"
+        return {"error": f"⚠️ <b>{symbol}</b> 종목을 찾을 수 없거나 데이터 조회에 실패했습니다. (yfinance 지원 티커인지 확인해 주세요.)"}
         
     cur_p = float(df["Close"].iloc[-1])
     
@@ -665,6 +666,137 @@ def execute_analysis(symbol: str) -> str:
     )
     consensus_pct = score * 100.0
     
+    return {
+        "df": df,
+        "cur_p": cur_p,
+        "agent_weights": agent_weights,
+        "consensus_pct": consensus_pct,
+        "votes": {
+            "macro": (vote_macro, rat_macro),
+            "trend": (vote_trend, rat_trend),
+            "value": (vote_value, rat_value),
+            "whale": (vote_whale, rat_whale),
+            "mean_reversion": (vote_mean_rev, rat_mean_rev),
+            "clucmay": (vote_clucmay, rat_clucmay)
+        }
+    }
+
+def generate_consensus_graph_base64(symbol: str, consensus_pct: float, agent_weights: dict, votes: dict) -> str:
+    """Generate a high-quality visualization of the agent voting decision process and return base64 PNG."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import io
+    import base64
+    
+    # Aesthetics aligning with premium dark theme
+    bg_color = "#121212"
+    panel_color = "#1a1a1a"
+    grid_color = "#2a2a2a"
+    text_color = "#ffffff"
+    sub_text_color = "#aaaaaa"
+    border_color = "#333333"
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6.5), gridspec_kw={'height_ratios': [1.2, 2.5]})
+    fig.patch.set_facecolor(bg_color)
+    
+    # ------------------ Ax1: Stance Gauge ------------------
+    ax1.set_facecolor(panel_color)
+    ax1.tick_params(left=False, labelleft=False, bottom=True, labelbottom=True, colors=sub_text_color, labelsize=9)
+    for spine in ax1.spines.values():
+        spine.set_color(border_color)
+    
+    ax1.set_xlim(-100, 100)
+    ax1.set_ylim(-0.5, 0.5)
+    ax1.set_title(f"{symbol} Consensus Index Stance", color=text_color, fontsize=12, fontweight="bold", pad=8)
+    
+    # Colored backdrop zones
+    ax1.axvspan(-100, -15, color="#ef4444", alpha=0.15)
+    ax1.axvspan(-15, 15, color="#888888", alpha=0.08)
+    ax1.axvspan(15, 100, color="#10b981", alpha=0.15)
+    ax1.axhline(0, color="#444444", linewidth=0.8, linestyle=":")
+    
+    # Current stance properties
+    if consensus_pct > 15.0:
+        bar_color = "#10b981"
+        stance_lbl = "Active BUY"
+    elif consensus_pct < -15.0:
+        bar_color = "#ef4444"
+        stance_lbl = "Active SELL"
+    else:
+        bar_color = "#f59e0b"
+        stance_lbl = "Neutral HOLD"
+        
+    ax1.barh(0, consensus_pct, height=0.3, color=bar_color, edgecolor=border_color, zorder=3)
+    ax1.axvline(consensus_pct, color="#ffffff", linewidth=2.5, linestyle="-", zorder=4)
+    ax1.text(consensus_pct, 0.28, f"{consensus_pct:+.1f}% ({stance_lbl})", 
+             color="#ffffff", fontsize=10, fontweight="bold", ha="center")
+             
+    ax1.text(-57.5, -0.35, "SELL ZONE", color="#ef4444", fontsize=9, fontweight="bold", ha="center")
+    ax1.text(0, -0.35, "NEUTRAL ZONE", color=sub_text_color, fontsize=9, fontweight="bold", ha="center")
+    ax1.text(57.5, -0.35, "BUY ZONE", color="#10b981", fontsize=9, fontweight="bold", ha="center")
+    
+    # ------------------ Ax2: Committee Breakdown ------------------
+    ax2.set_facecolor(panel_color)
+    ax2.tick_params(colors=sub_text_color, labelsize=9)
+    for spine in ax2.spines.values():
+        spine.set_color(border_color)
+    ax2.grid(True, axis="x", color=grid_color, linestyle=":", linewidth=0.5, zorder=0)
+    
+    agents = ["macro", "trend", "value", "whale", "mean_reversion", "clucmay"]
+    agent_labels = [
+        "Macro (Macro)", "Trend (Trend)", "Value (Value)",
+        "Whale (Whale)", "Mean Rev (RSI)", "ClucMay (Freq)"
+    ]
+    
+    weights = [agent_weights.get(a, 0.1667) for a in agents]
+    agent_votes = [votes.get(a, "HOLD") for a in agents]
+    
+    vote_colors = {
+        "BUY": "#10b981",
+        "SELL": "#ef4444",
+        "HOLD": "#4b5563"
+    }
+    bar_colors = [vote_colors.get(v, "#4b5563") for v in agent_votes]
+    
+    y_pos = range(len(agents))
+    bars = ax2.barh(y_pos, weights, color=bar_colors, edgecolor=border_color, height=0.55, zorder=3)
+    
+    ax2.set_yticks(y_pos)
+    ax2.set_yticklabels(agent_labels, color=text_color, fontsize=10, fontweight="bold")
+    ax2.set_xlabel("Agent Allocation Weight", color=sub_text_color, fontsize=10, labelpad=8)
+    ax2.set_title("AI Trader Forum Committee Breakdown (Votes & Weights)", color=text_color, fontsize=12, fontweight="bold", pad=8)
+    
+    # Text metrics labels next to the bars
+    for bar, vote, weight in zip(bars, agent_votes, weights):
+        width = bar.get_width()
+        lbl_x = width + 0.005
+        ax2.text(lbl_x, bar.get_y() + bar.get_height()/2.0, f"{vote} ({weight*100.0:.1f}%)",
+                 color="#ffffff", fontsize=9, fontweight="bold", va="center", ha="left")
+                 
+    ax2.set_xlim(0, max(weights) + 0.08)
+    
+    plt.tight_layout()
+    
+    # Render and encode image
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=150, facecolor=bg_color, bbox_inches="tight")
+    buf.seek(0)
+    img_bytes = buf.read()
+    plt.close(fig)
+    
+    return base64.b64encode(img_bytes).decode("utf-8")
+
+def execute_analysis(symbol: str) -> str:
+    """Fetch live data and run the 6-agent consensus suite for the symbol, returning text report."""
+    res = run_consensus_analysis(symbol)
+    if "error" in res:
+        return res["error"]
+        
+    cur_p = res["cur_p"]
+    consensus_pct = res["consensus_pct"]
+    votes = res["votes"]
+    
     if consensus_pct > 15.0:
         consensus_emoji = "🟢 <b>적극 매수 (BUY)</b>"
     elif consensus_pct < -15.0:
@@ -672,7 +804,6 @@ def execute_analysis(symbol: str) -> str:
     else:
         consensus_emoji = "🟡 <b>관망/중립 (HOLD)</b>"
         
-    # Format reply HTML
     lines = []
     lines.append(f"🤖 <b>[No Slip] 온디맨드 주식/크립토 실시간 분석 리포트</b>")
     lines.append("=" * 40)
@@ -681,23 +812,41 @@ def execute_analysis(symbol: str) -> str:
     lines.append("=" * 40)
     lines.append("<b>👥 AI 트레이더 포럼 위원회 의견록</b>:")
     
-    votes = {
-        "매크로 (Macro)": (vote_macro, rat_macro),
-        "추세추종 (Trend)": (vote_trend, rat_trend),
-        "안전마진 (Value)": (vote_value, rat_value),
-        "수급동향 (Whale)": (vote_whale, rat_whale),
-        "과매도회귀 (RSI)": (vote_mean_rev, rat_mean_rev),
-        "ClucMay (Freqtrade)": (vote_clucmay, rat_clucmay)
+    agent_display = {
+        "macro": "매크로 (Macro)",
+        "trend": "추세추종 (Trend)",
+        "value": "안전마진 (Value)",
+        "whale": "수급동향 (Whale)",
+        "mean_reversion": "과매도회귀 (RSI)",
+        "clucmay": "ClucMay (Freqtrade)"
     }
     
-    for agent_name, (vote, rationale) in votes.items():
+    for agent_key, display_name in agent_display.items():
+        vote, rationale = votes[agent_key]
         vote_emoji = "🟢" if vote == "BUY" else ("🔴" if vote == "SELL" else "🟡")
-        lines.append(f"  • {vote_emoji} <b>{agent_name}</b>: {escape_html(rationale)}")
+        lines.append(f"  • {vote_emoji} <b>{display_name}</b>: {escape_html(rationale)}")
         
     lines.append("\n" + "=" * 40)
     lines.append("※ 본 분석은 6인 퀀트 포럼의 실시간 스캔 결과이며 투자 참고용입니다.")
     
     return "\n".join(lines)
+
+def execute_analysis_with_graph(symbol: str) -> tuple[str, str | None]:
+    """Run the 6-agent consensus and return both the HTML text report and a base64-encoded PNG chart."""
+    res = run_consensus_analysis(symbol)
+    if "error" in res:
+        return res["error"], None
+        
+    report_text = execute_analysis(symbol)
+    
+    votes_only = {k: v[0] for k, v in res["votes"].items()}
+    try:
+        base64_img = generate_consensus_graph_base64(symbol, res["consensus_pct"], res["agent_weights"], votes_only)
+    except Exception as e:
+        print(f"Error generating consensus graph: {e}")
+        base64_img = None
+        
+    return report_text, base64_img
 
 def execute_debate_initiation(symbol: str) -> str:
     """Fetch symbol details and initiate a debate roundtable layout."""

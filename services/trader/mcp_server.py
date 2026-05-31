@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 import sys
+
 import json
 import traceback
 from pathlib import Path
@@ -17,11 +19,10 @@ TRADER_DIR = ROOT_DIR / "services" / "trader"
 if str(TRADER_DIR) not in sys.path:
     sys.path.insert(0, str(TRADER_DIR))
 
-# Lazy imports to prevent startup delays
-def get_analysis_tool(symbol: str) -> str:
-    from telegram_interactive_bot import execute_analysis, normalize_symbol
+def get_analysis_tool_with_graph(symbol: str) -> tuple[str, str | None]:
+    from telegram_interactive_bot import execute_analysis_with_graph, normalize_symbol
     normalized = normalize_symbol(symbol)
-    return execute_analysis(normalized)
+    return execute_analysis_with_graph(normalized)
 
 def get_tournament_tool() -> str:
     from bot_competition_tournament import run_tournament
@@ -219,7 +220,19 @@ def main():
                     sym = arguments.get("symbol")
                     if not sym:
                         raise ValueError("Missing symbol argument")
-                    result_text = get_analysis_tool(sym)
+                    report_text, base64_img = get_analysis_tool_with_graph(sym)
+                    result_text = [
+                        {
+                            "type": "text",
+                            "text": report_text
+                        }
+                    ]
+                    if base64_img:
+                        result_text.append({
+                            "type": "image",
+                            "mimeType": "image/png",
+                            "data": base64_img
+                        })
                     
                 elif tool_name == "run_league_tournament":
                     result_text = get_tournament_tool()
@@ -284,16 +297,21 @@ def main():
                 else:
                     raise ValueError(f"Unknown tool: {tool_name}")
                     
+                if isinstance(result_text, list):
+                    content_list = result_text
+                else:
+                    content_list = [
+                        {
+                            "type": "text",
+                            "text": str(result_text)
+                        }
+                    ]
+                    
                 res = {
                     "jsonrpc": "2.0",
                     "id": req_id,
                     "result": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": result_text
-                            }
-                        ]
+                        "content": content_list
                     }
                 }
                 send_response(res)
