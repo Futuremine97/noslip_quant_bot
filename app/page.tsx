@@ -227,6 +227,7 @@ type WrapperSummary = {
   } | null;
   bagging?: WrapperBaggingSummary | null;
   agentOutputs?: WrapperAgentOutput[];
+  consensusGraphBase64?: string | null;
 };
 
 type StepPrediction = {
@@ -8167,6 +8168,20 @@ export default function Page() {
                   <p key={`${selectedGraphNode.id}-${bullet}`}>{bullet}</p>
                 ))}
               </div>
+
+              {(selectedGraphNode.id === "wrapper" || selectedGraphNode.id === "decision") && activePrediction?.wrapper?.consensusGraphBase64 && (
+                <div className="mt-4 p-2 bg-[#1a1a1a] rounded-xl border border-[#333333] overflow-hidden">
+                  <p className="card-label mb-2" style={{ fontSize: "10px", color: "var(--sub-text)" }}>
+                    Decision-Making Graph
+                  </p>
+                  <img
+                    src={`data:image/png;base64,${activePrediction.wrapper.consensusGraphBase64}`}
+                    alt="Wrapper Council Consensus Graph"
+                    className="w-full h-auto rounded-lg"
+                    style={{ border: "1px solid #333" }}
+                  />
+                </div>
+              )}
             </div>
 
             <div className="agent-event-card">

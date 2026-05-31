@@ -253,9 +253,152 @@ def summarize_per_rule(per_rule):
     return summary
 
 
+def generate_wrapper_graph_base64(wrapper_result) -> str:
+    """Generate a premium dark-themed visualization of the Wrapper Council decisions and weights."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import io
+    import base64
+    
+    # 1. Extrapolate values
+    weighted_vote = safe_float(wrapper_result.get("wrapper_weighted_vote")) or 0.0
+    consensus_pct = weighted_vote * 100.0
+    
+    weights = wrapper_result.get("wrapper_weights") or {}
+    agent_outputs = wrapper_result.get("wrapper_agent_outputs") or []
+    
+    # 2. Styling matching the dark-theme UI mockup
+    bg_color = "#121212"
+    panel_color = "#1a1a1a"
+    grid_color = "#2a2a2a"
+    text_color = "#ffffff"
+    sub_text_color = "#aaaaaa"
+    border_color = "#333333"
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 5), gridspec_kw={'height_ratios': [1.2, 2.5]})
+    fig.patch.set_facecolor(bg_color)
+    
+    # ------------------ Ax1: Stance Gauge ------------------
+    ax1.set_facecolor(panel_color)
+    ax1.tick_params(left=False, labelleft=False, bottom=True, labelbottom=True, colors=sub_text_color, labelsize=8)
+    for spine in ax1.spines.values():
+        spine.set_color(border_color)
+        
+    ax1.set_xlim(-100, 100)
+    ax1.set_ylim(-0.5, 0.5)
+    ax1.set_title("Wrapper Council Consensus Index", color=text_color, fontsize=10, fontweight="bold", pad=6)
+    
+    # Background zones
+    ax1.axvspan(-100, -15, color="#ef4444", alpha=0.15)
+    ax1.axvspan(-15, 15, color="#888888", alpha=0.08)
+    ax1.axvspan(15, 100, color="#10b981", alpha=0.15)
+    ax1.axhline(0, color="#444444", linewidth=0.6, linestyle=":")
+    
+    final_action = wrapper_result.get("wrapper_final_action") or "HOLD"
+    if final_action == "BUY":
+        bar_color = "#10b981"
+        stance_lbl = "BUY"
+    elif final_action == "SELL":
+        bar_color = "#ef4444"
+        stance_lbl = "SELL"
+    else:
+        bar_color = "#f59e0b"
+        stance_lbl = "HOLD"
+        
+    ax1.barh(0, consensus_pct, height=0.25, color=bar_color, edgecolor=border_color, zorder=3)
+    ax1.axvline(consensus_pct, color="#ffffff", linewidth=2.0, linestyle="-", zorder=4)
+    ax1.text(consensus_pct, 0.26, f"{consensus_pct:+.1f}% ({stance_lbl})", 
+             color="#ffffff", fontsize=9, fontweight="bold", ha="center")
+             
+    ax1.text(-57.5, -0.35, "SELL ZONE", color="#ef4444", fontsize=8, fontweight="bold", ha="center")
+    ax1.text(0, -0.35, "NEUTRAL ZONE", color=sub_text_color, fontsize=8, fontweight="bold", ha="center")
+    ax1.text(57.5, -0.35, "BUY ZONE", color="#10b981", fontsize=8, fontweight="bold", ha="center")
+    
+    # ------------------ Ax2: Agent Breakdown ------------------
+    ax2.set_facecolor(panel_color)
+    ax2.tick_params(colors=sub_text_color, labelsize=8)
+    for spine in ax2.spines.values():
+        spine.set_color(border_color)
+    ax2.grid(True, axis="x", color=grid_color, linestyle=":", linewidth=0.5, zorder=0)
+    
+    agent_names = []
+    agent_weights = []
+    agent_actions = []
+    
+    name_display = {
+        "regret_agent": "Regret Agent",
+        "em_regime_agent": "EM Regime Agent",
+        "minimax_prior_agent": "Minimax Prior",
+        "cost_agent": "Execution Cost",
+        "drawdown_linger_agent": "Drawdown Linger",
+        "spike_sustain_agent": "Spike Sustain"
+    }
+    
+    for agent in agent_outputs:
+        if not isinstance(agent, dict):
+            continue
+        name = agent.get("name")
+        if not name:
+            continue
+        friendly_name = name_display.get(name, name.replace("_", " ").title())
+        agent_names.append(friendly_name)
+        
+        weight = safe_float(weights.get(name)) or 0.0
+        agent_weights.append(weight)
+        
+        agent_actions.append(agent.get("action") or "HOLD")
+        
+    if not agent_names:
+        agent_names = ["No Agents"]
+        agent_weights = [1.0]
+        agent_actions = ["HOLD"]
+        
+    vote_colors = {
+        "BUY": "#10b981",
+        "SELL": "#ef4444",
+        "HOLD": "#4b5563"
+    }
+    bar_colors = [vote_colors.get(v, "#4b5563") for v in agent_actions]
+    
+    y_pos = range(len(agent_names))
+    bars = ax2.barh(y_pos, agent_weights, color=bar_colors, edgecolor=border_color, height=0.5, zorder=3)
+    
+    ax2.set_yticks(y_pos)
+    ax2.set_yticklabels(agent_names, color=text_color, fontsize=8, fontweight="bold")
+    ax2.set_xlabel("Agent Weights", color=sub_text_color, fontsize=8, labelpad=5)
+    ax2.set_title("Council Agent Breakdown (Votes & Weights)", color=text_color, fontsize=10, fontweight="bold", pad=6)
+    
+    for bar, vote, weight in zip(bars, agent_actions, agent_weights):
+        width = bar.get_width()
+        lbl_x = width + 0.005
+        ax2.text(lbl_x, bar.get_y() + bar.get_height()/2.0, f"{vote} ({weight*100.0:.1f}%)",
+                 color="#ffffff", fontsize=8, fontweight="bold", va="center", ha="left")
+                 
+    ax2.set_xlim(0, max(agent_weights) + 0.08)
+    
+    plt.tight_layout()
+    
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=150, facecolor=bg_color, bbox_inches="tight")
+    buf.seek(0)
+    img_bytes = buf.read()
+    plt.close(fig)
+    
+    return base64.b64encode(img_bytes).decode("utf-8")
+
+
 def serialize_wrapper_result(wrapper_result):
     if not isinstance(wrapper_result, dict):
         return None
+
+    # Generate graph base64
+    base64_graph = None
+    try:
+        base64_graph = generate_wrapper_graph_base64(wrapper_result)
+    except Exception as e:
+        # Fallback silently
+        pass
 
     return {
         "finalAction": wrapper_result.get("wrapper_final_action"),
@@ -269,6 +412,7 @@ def serialize_wrapper_result(wrapper_result):
         "rationale": wrapper_result.get("wrapper_rationale") or [],
         "byzantine": json_safe(wrapper_result.get("wrapper_byzantine") or {}),
         "bagging": json_safe(wrapper_result.get("wrapper_bagging") or {}),
+        "consensusGraphBase64": base64_graph,
         "agentOutputs": [
             {
                 "name": agent_output.get("name"),
