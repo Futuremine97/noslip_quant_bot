@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 
 # Set root directory and load environment variables
 ROOT_DIR = Path(__file__).resolve().parents[2]
+if not ROOT_DIR.exists() or not (ROOT_DIR / "services" / "trader").exists():
+    ROOT_DIR = Path(__file__).resolve().parents[2]
+
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -262,6 +265,10 @@ def parse_website_request(text: str) -> bool:
     text = text.strip()
     return text in ["/website", "/웹사이트"]
 
+def parse_infomap_request(text: str) -> bool:
+    text = text.strip()
+    return text in ["/infomap", "/정보맵", "/시각화", "/infomap시각화"]
+
 def parse_portfolio_request(text: str) -> bool:
     text = text.strip()
     return text in ["/portfolio", "/포트폴리오"]
@@ -323,6 +330,11 @@ def execute_features_summary() -> str:
         "• <b>설명</b>: 주요 자산(BTC, ETH, SOL, AAPL, MU, INTC 등)에 최적화 학습된 최신 Prophet 챔피언 모델의 등록 상태와 평가 메트릭스를 조회합니다.",
         "• <b>사용법</b>: <code>/챔피언</code> 또는 <code>/champion</code>",
         "  - <i>예시: /챔피언, /champion</i>",
+        "",
+        "📊 <b>10. S&P 500 정보맵 시각화</b>",
+        "• <b>설명</b>: S&P 500의 최신 정보맵 2차원(모멘텀-변동성) 분포를 Matplotlib 차트로 생성하여 시각화 리포트를 전송합니다.",
+        "• <b>사용법</b>: <code>/infomap</code> 또는 <code>/정보맵</code> 또는 <code>/시각화</code>",
+        "  - <i>예시: /infomap, /시각화</i>",
         "",
         "=" * 40,
         "※ 본 봇은 지정된 허용 단톡방(Allowlist)에서만 동작하며, 모든 분석은 투자 참고용입니다."
@@ -811,6 +823,187 @@ def generate_agent_replies(symbol: str, user_opinion: str) -> str:
         
     return format_debate_reply(symbol, user_opinion, trend_reply, value_reply, whale_reply)
 
+def generate_and_save_infomap_plot(photo_path: Path) -> dict:
+    import json
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    
+    latest_json_path = ROOT_DIR / "services" / "trader" / "model_cache" / "sp500_information_maps" / "latest.json"
+    if not latest_json_path.exists():
+        raise FileNotFoundError(f"latest.json not found at {latest_json_path}")
+        
+    with open(latest_json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        
+    points = data.get("points", [])
+    if not points:
+        raise ValueError("No points found in latest.json")
+        
+    symbols = []
+    names = []
+    xs = []
+    ys = []
+    quadrants = []
+    
+    for p in points:
+        sym = p.get("symbol")
+        name = p.get("name", sym)
+        coords = p.get("firstCoordinateSpace")
+        if not coords or coords.get("x") is None or coords.get("y") is None:
+            continue
+        symbols.append(sym)
+        names.append(name)
+        xs.append(float(coords["x"]))
+        ys.append(float(coords["y"]))
+        quadrants.append(p.get("quadrant", "unknown"))
+        
+    if not xs:
+        raise ValueError("No valid coordinates found in points")
+        
+    quadrant_counts = {
+        "breakout acceleration": 0,
+        "uptrend cooling": 0,
+        "recovery setup": 0,
+        "selloff acceleration": 0,
+        "unknown": 0
+    }
+    
+    for q in quadrants:
+        if q in quadrant_counts:
+            quadrant_counts[q] += 1
+        else:
+            quadrant_counts["unknown"] += 1
+            
+    fig, ax = plt.subplots(figsize=(10, 8), dpi=150)
+    fig.patch.set_facecolor("#121212")
+    ax.set_facecolor("#1a1a1a")
+    
+    colors_map = {
+        "breakout acceleration": "#00f5d4",
+        "uptrend cooling": "#f59e0b",
+        "recovery setup": "#d946ef",
+        "selloff acceleration": "#ef4444",
+        "unknown": "#888888"
+    }
+    point_colors = [colors_map.get(q, "#888888") for q in quadrants]
+    
+    ax.scatter(xs, ys, color=point_colors, s=120, alpha=0.15, edgecolors='none', zorder=2)
+    ax.scatter(xs, ys, color=point_colors, s=35, alpha=0.9, edgecolors='#ffffff', linewidths=0.5, zorder=3)
+    
+    ax.set_title("S&P 500 Information Map", fontsize=16, fontweight="bold", color="#ffffff", pad=15)
+    ax.set_xlabel("Momentum / Expected Return (1st Coordinate X)", fontsize=11, color="#aaaaaa", labelpad=10)
+    ax.set_ylabel("Volatility / Risk (1st Coordinate Y)", fontsize=11, color="#aaaaaa", labelpad=10)
+    
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    x_margin = max(0.1, (x_max - x_min) * 0.15)
+    y_margin = max(0.5, (y_max - y_min) * 0.15)
+    
+    xlim_min = min(x_min - x_margin, -0.05)
+    xlim_max = max(x_max + x_margin, 0.05)
+    ylim_min = min(y_min - y_margin, -0.5)
+    ylim_max = max(y_max + y_margin, 0.5)
+    
+    ax.set_xlim(xlim_min, xlim_max)
+    ax.set_ylim(ylim_min, ylim_max)
+    
+    ax.axhline(0, color="#444444", linewidth=1.2, linestyle="--", alpha=0.7, zorder=1)
+    ax.axvline(0, color="#444444", linewidth=1.2, linestyle="--", alpha=0.7, zorder=1)
+    
+    ax.grid(True, which="both", color="#2a2a2a", linestyle=":", linewidth=0.5, zorder=0)
+    
+    ax.tick_params(colors="#aaaaaa", labelsize=9)
+    for spine in ax.spines.values():
+        spine.set_color("#333333")
+        
+    annotated_count = 0
+    annotated_symbols = set()
+    major_targets = {"AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "NFLX", "AMD", "AVGO"}
+    
+    dists = np.sqrt(np.array(xs)**2 + np.array(ys)**2)
+    sorted_indices = np.argsort(dists)[::-1]
+    
+    for idx in range(len(xs)):
+        sym = symbols[idx]
+        should_annotate = False
+        if len(xs) <= 15:
+            should_annotate = True
+        else:
+            if sym in major_targets:
+                should_annotate = True
+            elif idx in sorted_indices[:8] and annotated_count < 15:
+                should_annotate = True
+                
+        if should_annotate:
+            annotated_count += 1
+            annotated_symbols.add(sym)
+            ax.annotate(
+                sym,
+                (xs[idx], ys[idx]),
+                textcoords="offset points",
+                xytext=(0, 6),
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                fontweight="bold",
+                color="#ffffff",
+                bbox=dict(boxstyle="round,pad=0.2", fc="#262626", ec="none", alpha=0.75),
+                zorder=4
+            )
+            
+    bbox_props = dict(boxstyle="round,pad=0.3", fc="#1a1a1a", ec="#333333", alpha=0.85)
+    ax.text(xlim_max - (xlim_max * 0.05), ylim_max - (ylim_max * 0.08), "Breakout Acceleration", color="#00f5d4", fontsize=9, fontweight="bold", ha="right", va="top", bbox=bbox_props)
+    ax.text(xlim_max - (xlim_max * 0.05), ylim_min + (abs(ylim_min) * 0.08), "Uptrend Cooling", color="#f59e0b", fontsize=9, fontweight="bold", ha="right", va="bottom", bbox=bbox_props)
+    ax.text(xlim_min + (abs(xlim_min) * 0.05), ylim_max - (ylim_max * 0.08), "Recovery Setup", color="#d946ef", fontsize=9, fontweight="bold", ha="left", va="top", bbox=bbox_props)
+    ax.text(xlim_min + (abs(xlim_min) * 0.05), ylim_min + (abs(ylim_min) * 0.08), "Selloff Acceleration", color="#ef4444", fontsize=9, fontweight="bold", ha="left", va="bottom", bbox=bbox_props)
+    
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='#00f5d4', markersize=8, label='Breakout Accel'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='#d946ef', markersize=8, label='Recovery Setup'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='#f59e0b', markersize=8, label='Uptrend Cooling'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='#ef4444', markersize=8, label='Selloff Accel')
+    ]
+    ax.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=4, frameon=True, facecolor='#1a1a1a', edgecolor='#333333', labelcolor='#ffffff', fontsize=8)
+    
+    plt.tight_layout()
+    photo_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(photo_path, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
+    plt.close(fig)
+    
+    sorted_by_x = sorted(zip(symbols, xs, ys, quadrants), key=lambda item: item[1])
+    sorted_by_y = sorted(zip(symbols, xs, ys, quadrants), key=lambda item: item[2])
+    
+    return {
+        "mapDate": data.get("mapDate", "Unknown"),
+        "total_symbols": len(symbols),
+        "quadrant_counts": quadrant_counts,
+        "max_momentum": sorted_by_x[-1] if sorted_by_x else None,
+        "min_momentum": sorted_by_x[0] if sorted_by_x else None,
+        "max_volatility": sorted_by_y[-1] if sorted_by_y else None,
+        "min_volatility": sorted_by_y[0] if sorted_by_y else None,
+    }
+
+def reply_photo_to_telegram(chat_id: int, photo_path: str, caption: str, reply_to_message_id: int):
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    payload = {
+        "chat_id": chat_id,
+        "caption": caption,
+        "parse_mode": "HTML",
+        "reply_to_message_id": reply_to_message_id
+    }
+    try:
+        with open(photo_path, "rb") as f:
+            files = {"photo": f}
+            res = requests.post(url, data=payload, files=files, timeout=20)
+            res.raise_for_status()
+            print(f"✅ Sent photo to chat {chat_id}, message {reply_to_message_id}")
+    except Exception as e:
+        print(f"❌ Failed to send photo to Telegram: {e}")
+
 def reply_to_telegram(chat_id: int, text: str, reply_to_message_id: int):
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -991,6 +1184,48 @@ def main():
                         reply_to_telegram(chat_id, f"⚠️ 챔피언 모델 조회 중 오류가 발생했습니다: {e}", message_id)
                     continue
 
+                # 0.99. Parse Infomap Request
+                if parse_infomap_request(text):
+                    print(f"📊 Received infomap visualization request from chat {chat_id}")
+                    reply_to_telegram(chat_id, "⏳ <b>S&P 500 정보맵 시각화 차트를 생성 중입니다...</b>", message_id)
+                    try:
+                        photo_path = ROOT_DIR / "data" / "sp500_infomap.png"
+                        stats = generate_and_save_infomap_plot(photo_path)
+                        
+                        caption_lines = [
+                            f"📊 <b>S&P 500 Information Map ({stats['mapDate']})</b>",
+                            "="*35,
+                            f"총 분석 종목 수: <b>{stats['total_symbols']}</b>개",
+                            "",
+                            "🟢 <b>우상향 가속 (Breakout Accel)</b>: " + f"<b>{stats['quadrant_counts']['breakout acceleration']}</b>개",
+                            "🟣 <b>회복 국면 (Recovery Setup)</b>: " + f"<b>{stats['quadrant_counts']['recovery setup']}</b>개",
+                            "🟡 <b>상승 둔화 (Uptrend Cooling)</b>: " + f"<b>{stats['quadrant_counts']['uptrend cooling']}</b>개",
+                            "🔴 <b>하락 가속 (Selloff Accel)</b>: " + f"<b>{stats['quadrant_counts']['selloff acceleration']}</b>개",
+                            "="*35,
+                            "🔍 <b>주요 극단적 종목 (Outliers)</b>:",
+                        ]
+                        
+                        if stats['max_momentum']:
+                            sym, mx, my, q = stats['max_momentum']
+                            caption_lines.append(f"  • <b>최대 모멘텀</b>: {sym} (X: {mx:+.3f})")
+                        if stats['min_momentum']:
+                            sym, mx, my, q = stats['min_momentum']
+                            caption_lines.append(f"  • <b>최대 역모멘텀</b>: {sym} (X: {mx:+.3f})")
+                        if stats['max_volatility']:
+                            sym, mx, my, q = stats['max_volatility']
+                            caption_lines.append(f"  • <b>최대 변동성</b>: {sym} (Y: {my:+.3f})")
+                        if stats['min_volatility']:
+                            sym, mx, my, q = stats['min_volatility']
+                            caption_lines.append(f"  • <b>최저 변동성</b>: {sym} (Y: {my:+.3f})")
+                            
+                        caption_lines.append("\n※ 첨부된 차트에서 자산의 2차원(모멘텀-변동성) 공간상의 위치를 시각적으로 확인할 수 있습니다.")
+                        
+                        caption = "\n".join(caption_lines)
+                        reply_photo_to_telegram(chat_id, str(photo_path), caption, message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error executing infomap request: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 정보맵 시각화 생성 중 오류가 발생했습니다: {e}", message_id)
+                    continue
 
                 # 1. Parse Debate Request
                 debate_query = parse_debate_request(text)

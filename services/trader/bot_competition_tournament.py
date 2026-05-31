@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 
 # Set root directory and load environment variables
 ROOT_DIR = Path(__file__).resolve().parents[2]
+if not ROOT_DIR.exists() or not (ROOT_DIR / "services" / "trader").exists():
+    ROOT_DIR = Path(__file__).resolve().parents[2]
+
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -24,6 +27,8 @@ from services.trader.whale_pump_monitor import send_telegram_message
 
 # Artifact report path
 ARTIFACT_DIR = Path.home() / ".gemini" / "antigravity" / "brain" / "1236d92e-c34b-4f69-80c5-fbbef0a0acf5"
+if not ARTIFACT_DIR.exists():
+    ARTIFACT_DIR = ROOT_DIR / "data"
 REPORT_PATH = ARTIFACT_DIR / "bot_competition_report.md"
 
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
