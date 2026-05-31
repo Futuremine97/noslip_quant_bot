@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "NoSlipQuant": {
-      "command": "python3",
+      "command": "/path/to/your/cloned/repository/services/trader/.venv/bin/python",
       "args": [
         "-u",
-        "services/trader/mcp_server.py"
+        "/path/to/your/cloned/repository/services/trader/mcp_server.py"
       ]
     }
   }

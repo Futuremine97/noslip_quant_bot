@@ -97,6 +97,86 @@ def main():
                               "type": "object",
                               "properties": {}
                             }
+                          },
+                          {
+                            "name": "configure_personal_ontology",
+                            "description": "Configure or update a personalized investment concept/category with a list of symbols and target evaluation constraints.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "concept_name": {
+                                  "type": "string",
+                                  "description": "Unique name for the concept (e.g., 'Quantum Computing' or 'Value Tech')."
+                                },
+                                "description": {
+                                  "type": "string",
+                                  "description": "A description of this personalized category."
+                                },
+                                "symbols": {
+                                  "type": "array",
+                                  "items": { "type": "string" },
+                                  "description": "List of tickers/symbols to map to this concept."
+                                },
+                                "rules": {
+                                  "type": "object",
+                                  "description": "Custom audit rules. Supported: min_price (number), max_price (number), min_rsi (number), max_rsi (number), require_price_above_sma20 (boolean), min_momentum (number, e.g. 0.05), max_volatility (number, e.g. 5.0), expected_action (string, 'BUY'/'SELL'/'HOLD')."
+                                },
+                                "user_id": {
+                                  "type": "string",
+                                  "description": "User identifier to isolate configs. Defaults to 'default'."
+                                }
+                              },
+                              "required": ["concept_name"]
+                            }
+                          },
+                          {
+                            "name": "get_personal_ontology",
+                            "description": "Retrieve all saved personalized ontology concepts and rules for a user.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "user_id": {
+                                  "type": "string",
+                                  "description": "User identifier. Defaults to 'default'."
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "name": "delete_personal_ontology_concept",
+                            "description": "Delete a personalized ontology concept from the user config.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "concept_name": {
+                                  "type": "string",
+                                  "description": "The name of the concept to delete."
+                                },
+                                "user_id": {
+                                  "type": "string",
+                                  "description": "User identifier. Defaults to 'default'."
+                                }
+                              },
+                              "required": ["concept_name"]
+                            }
+                          },
+                          {
+                            "name": "analyze_by_personal_ontology",
+                            "description": "Fetch live market metrics for symbols in a personalized concept and audit them against custom constraints.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "concept_name": {
+                                  "type": "string",
+                                  "description": "The name of the personalized concept to analyze."
+                                },
+                                "user_id": {
+                                  "type": "string",
+                                  "description": "User identifier. Defaults to 'default'."
+                                }
+                              },
+                              "required": ["concept_name"]
+                            }
                           }
                         ]
                     }
@@ -116,6 +196,48 @@ def main():
                     
                 elif tool_name == "run_league_tournament":
                     result_text = get_tournament_tool()
+                    
+                elif tool_name == "configure_personal_ontology":
+                    concept_name = arguments.get("concept_name")
+                    if not concept_name:
+                        raise ValueError("Missing concept_name argument")
+                    desc = arguments.get("description", "")
+                    symbols = arguments.get("symbols", [])
+                    rules = arguments.get("rules", {})
+                    user_id = arguments.get("user_id", "default")
+                    
+                    from personal_ontology import save_concept
+                    res_dict = save_concept(user_id, concept_name, desc, symbols, rules)
+                    result_text = f"✅ Personalized ontology concept '{concept_name}' configured successfully.\n\n" + json.dumps(res_dict, indent=2, ensure_ascii=False)
+                    
+                elif tool_name == "get_personal_ontology":
+                    user_id = arguments.get("user_id", "default")
+                    
+                    from personal_ontology import get_concepts
+                    concepts = get_concepts(user_id)
+                    result_text = f"📂 Personalized Ontology Concepts for user '{user_id}':\n\n" + json.dumps(concepts, indent=2, ensure_ascii=False)
+                    
+                elif tool_name == "delete_personal_ontology_concept":
+                    concept_name = arguments.get("concept_name")
+                    if not concept_name:
+                        raise ValueError("Missing concept_name argument")
+                    user_id = arguments.get("user_id", "default")
+                    
+                    from personal_ontology import delete_concept
+                    success = delete_concept(user_id, concept_name)
+                    if success:
+                        result_text = f"✅ Concept '{concept_name}' deleted successfully."
+                    else:
+                        result_text = f"⚠️ Concept '{concept_name}' not found for user '{user_id}'."
+                        
+                elif tool_name == "analyze_by_personal_ontology":
+                    concept_name = arguments.get("concept_name")
+                    if not concept_name:
+                        raise ValueError("Missing concept_name argument")
+                    user_id = arguments.get("user_id", "default")
+                    
+                    from personal_ontology import evaluate_ontology_concept
+                    result_text = evaluate_ontology_concept(user_id, concept_name)
                     
                 else:
                     raise ValueError(f"Unknown tool: {tool_name}")
