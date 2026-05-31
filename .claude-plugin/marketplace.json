@@ -1,0 +1,14 @@
+{
+  "name": "noslip-marketplace",
+  "owner": {
+    "name": "Futuremine97",
+    "email": "futuremine97@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "noslip-quant",
+      "description": "6-Agent Consensus and Prophet Forecasting Engine for S&P 500 stocks and Cryptos",
+      "source": "./"
+    }
+  ]
+}
