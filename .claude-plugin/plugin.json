@@ -1,0 +1,11 @@
+{
+  "name": "noslip-quant",
+  "version": "1.0.0",
+  "description": "6-Agent Consensus and Prophet Forecasting Engine for S&P 500 stocks and major Cryptos (BTC, ETH, SOL). Includes interactive analysis and tournament league backtests.",
+  "author": {
+    "name": "Futuremine97",
+    "url": "https://github.com/Futuremine97"
+  },
+  "repository": "https://github.com/Futuremine97/noslip_quant_bot",
+  "license": "MIT"
+}

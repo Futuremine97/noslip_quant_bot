@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "NoSlipQuant": {
+      "command": "python3",
+      "args": [
+        "-u",
+        "services/trader/mcp_server.py"
+      ]
+    }
+  }
+}
