@@ -1,0 +1,17 @@
+# Keep the build context small and the image clean.
+.git
+.gitignore
+node_modules
+.next
+.venv
+**/.venv
+services/trader/model_cache
+model_cache
+**/exports
+data
+*.csv
+.env
+.DS_Store
+**/__pycache__
+*.pyc
+tsconfig.tsbuildinfo
