@@ -79,13 +79,13 @@ def main():
                         "tools": [
                           {
                             "name": "analyze_ticker",
-                            "description": "Analyze a stock (e.g. INTC, TSLA, NVDA) or crypto (e.g. BTC, ETH, SOL) symbol using the 6-Agent Consensus model.",
+                            "description": "Generate a full trading analysis for a single stock or cryptocurrency using the 6-Agent Consensus model (technical, momentum, volatility, trend, mean-reversion, and risk agents that vote on a final BUY/SELL/HOLD decision).\n\nUse this when the user asks whether to buy, sell, or hold a specific asset, or wants the current signal, indicators, and rationale for one symbol.\n\nReturns a human-readable report containing the consensus action, per-agent votes, key indicators (price, RSI, SMA, momentum, volatility), and a base64-encoded decision-flow graph image. Read-only: fetches live market data but does not place trades or modify any saved state.",
                             "inputSchema": {
                               "type": "object",
                               "properties": {
                                 "symbol": {
                                   "type": "string",
-                                  "description": "The stock or crypto symbol to analyze."
+                                  "description": "A single asset ticker. Stocks use the bare symbol (e.g. 'INTC', 'TSLA', 'NVDA'); major cryptos accept either the short form ('BTC', 'ETH', 'SOL') or the '-USD' pair (e.g. 'BTC-USD'). Supports S&P 500 stocks and BTC/ETH/SOL. One symbol per call."
                                 }
                               },
                               "required": ["symbol"]
@@ -93,7 +93,7 @@ def main():
                           },
                           {
                             "name": "run_league_tournament",
-                            "description": "Run the daily AI & Quant bot tournament backtest league to compare top open-source strategies.",
+                            "description": "Run the daily AI & Quant bot tournament: a backtest league that pits the project's top open-source trading strategies against each other and ranks them by performance.\n\nUse this when the user wants to compare strategies, see which bot is currently winning, or refresh today's leaderboard standings. No input is required.\n\nReturns a ranked, human-readable summary of each strategy's backtest results (returns and relative standing). Read-only and may take longer than other tools because it runs simulations.",
                             "inputSchema": {
                               "type": "object",
                               "properties": {}
@@ -101,30 +101,30 @@ def main():
                           },
                           {
                             "name": "configure_personal_ontology",
-                            "description": "Configure or update a personalized investment concept/category with a list of symbols and target evaluation constraints.",
+                            "description": "Create or update a personalized investment concept: a named basket of symbols plus custom audit rules used later by analyze_by_personal_ontology.\n\nUse this to save a watchlist or thesis (e.g. a 'Quantum Computing' basket) together with the constraints that define a good candidate. Calling it again with an existing concept_name overwrites that concept.\n\nWrites to per-user persistent storage and returns a confirmation of the saved concept. Use get_personal_ontology to review what is stored and delete_personal_ontology_concept to remove it.",
                             "inputSchema": {
                               "type": "object",
                               "properties": {
                                 "concept_name": {
                                   "type": "string",
-                                  "description": "Unique name for the concept (e.g., 'Quantum Computing' or 'Value Tech')."
+                                  "description": "Unique name identifying the concept; reusing an existing name overwrites it (e.g. 'Quantum Computing', 'Value Tech')."
                                 },
                                 "description": {
                                   "type": "string",
-                                  "description": "A description of this personalized category."
+                                  "description": "Optional free-text note describing the thesis or purpose of this concept."
                                 },
                                 "symbols": {
                                   "type": "array",
                                   "items": { "type": "string" },
-                                  "description": "List of tickers/symbols to map to this concept."
+                                  "description": "Tickers belonging to this concept, same format as analyze_ticker (e.g. ['NVDA', 'IONQ', 'BTC-USD'])."
                                 },
                                 "rules": {
                                   "type": "object",
-                                  "description": "Custom audit rules. Supported: min_price (number), max_price (number), min_rsi (number), max_rsi (number), require_price_above_sma20 (boolean), min_momentum (number, e.g. 0.05), max_volatility (number, e.g. 5.0), expected_action (string, 'BUY'/'SELL'/'HOLD')."
+                                  "description": "Optional audit constraints each symbol is checked against. Supported keys: min_price (number), max_price (number), min_rsi (number), max_rsi (number), require_price_above_sma20 (boolean), min_momentum (number, e.g. 0.05 = 5%), max_volatility (number, e.g. 5.0), expected_action (string: 'BUY', 'SELL', or 'HOLD'). Omit to store the concept without constraints."
                                 },
                                 "user_id": {
                                   "type": "string",
-                                  "description": "User identifier to isolate configs. Defaults to 'default'."
+                                  "description": "Identifier that isolates one user's concepts from another's. Optional; defaults to 'default'."
                                 }
                               },
                               "required": ["concept_name"]
@@ -132,30 +132,30 @@ def main():
                           },
                           {
                             "name": "get_personal_ontology",
-                            "description": "Retrieve all saved personalized ontology concepts and rules for a user.",
+                            "description": "List every saved personalized concept for a user, including each concept's description, symbols, and audit rules.\n\nUse this to review what concepts exist before analyzing, updating, or deleting them. Read-only.\n\nReturns a human-readable summary of all stored concepts for the given user_id (empty if none have been configured).",
                             "inputSchema": {
                               "type": "object",
                               "properties": {
                                 "user_id": {
                                   "type": "string",
-                                  "description": "User identifier. Defaults to 'default'."
+                                  "description": "Identifier whose concepts to retrieve. Optional; defaults to 'default'."
                                 }
                               }
                             }
                           },
                           {
                             "name": "delete_personal_ontology_concept",
-                            "description": "Delete a personalized ontology concept from the user config.",
+                            "description": "Permanently remove one saved personalized concept from a user's stored configuration.\n\nUse this to clean up a concept that is no longer needed. This is destructive and cannot be undone; only the named concept is removed, other concepts are untouched.\n\nReturns a confirmation of the deletion. If the concept does not exist, it reports that nothing was deleted.",
                             "inputSchema": {
                               "type": "object",
                               "properties": {
                                 "concept_name": {
                                   "type": "string",
-                                  "description": "The name of the concept to delete."
+                                  "description": "Exact name of the concept to delete (must match a name from get_personal_ontology)."
                                 },
                                 "user_id": {
                                   "type": "string",
-                                  "description": "User identifier. Defaults to 'default'."
+                                  "description": "Identifier owning the concept to delete. Optional; defaults to 'default'."
                                 }
                               },
                               "required": ["concept_name"]
@@ -163,17 +163,17 @@ def main():
                           },
                           {
                             "name": "analyze_by_personal_ontology",
-                            "description": "Fetch live market metrics for symbols in a personalized concept and audit them against custom constraints.",
+                            "description": "Fetch live market metrics for every symbol in a saved concept and audit each one against that concept's custom rules.\n\nUse this after configure_personal_ontology to evaluate a whole basket at once and see which symbols currently pass or fail the defined constraints. The concept must already exist (create it with configure_personal_ontology first).\n\nReturns a human-readable per-symbol report showing live metrics and a pass/fail verdict against each rule. Read-only: reads market data and the saved concept but does not modify stored state.",
                             "inputSchema": {
                               "type": "object",
                               "properties": {
                                 "concept_name": {
                                   "type": "string",
-                                  "description": "The name of the personalized concept to analyze."
+                                  "description": "Name of an existing saved concept to evaluate (must match a name from get_personal_ontology)."
                                 },
                                 "user_id": {
                                   "type": "string",
-                                  "description": "User identifier. Defaults to 'default'."
+                                  "description": "Identifier owning the concept. Optional; defaults to 'default'."
                                 }
                               },
                               "required": ["concept_name"]
@@ -181,13 +181,13 @@ def main():
                           },
                           {
                             "name": "submit_prophet_leaderboard",
-                            "description": "Submit all local Prophet champion forecasting model metrics to the central shared leaderboard.",
+                            "description": "Publish this installation's local Prophet champion forecasting model metrics to the shared global leaderboard hosted on the central server.\n\nUse this when the user wants to register or update their bot's standings on the public leaderboard. This makes a network call that writes the local metrics to a shared external service under the given bot_id.\n\nReturns a confirmation of what was submitted. Pair with view_prophet_leaderboard to see the resulting standings.",
                             "inputSchema": {
                               "type": "object",
                               "properties": {
                                 "bot_id": {
                                   "type": "string",
-                                  "description": "Unique identifier/name for your bot (e.g. 'Futuremine97_bot')."
+                                  "description": "Public name your forecasts are recorded under on the shared leaderboard; reusing an existing bot_id updates that entry (e.g. 'Futuremine97_bot')."
                                 }
                               },
                               "required": ["bot_id"]
@@ -195,13 +195,13 @@ def main():
                           },
                           {
                             "name": "view_prophet_leaderboard",
-                            "description": "Fetch the shared global Prophet leaderboard standings from the central server.",
+                            "description": "Read the shared global Prophet forecasting leaderboard from the central server and show current standings across all participating bots.\n\nUse this to see how forecasting models rank, optionally narrowing to a single asset. Read-only network call; does not submit or modify anything.\n\nReturns a ranked, human-readable table of bots and their forecast accuracy metrics.",
                             "inputSchema": {
                               "type": "object",
                               "properties": {
                                 "symbol": {
                                   "type": "string",
-                                  "description": "Optional asset symbol to filter by (e.g. 'BTC-USD')."
+                                  "description": "Optional asset filter in '-USD' pair form (e.g. 'BTC-USD'). Omit to view standings across all assets."
                                 }
                               }
                             }
