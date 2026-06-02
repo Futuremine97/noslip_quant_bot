@@ -61,6 +61,13 @@ SYMBOL_MAPPING = {
     "현대차": "005380.KS",
     "네이버": "035420.KS",
     "카카오": "035720.KS",
+    "lg에너지솔루션": "373220.KS",
+    "기아": "000270.KS",
+    "삼성바이오로직스": "207940.KS",
+    "포스코홀딩스": "005490.KS",
+    "lg화학": "051910.KS",
+    "현대모비스": "012330.KS",
+    "kb금융": "105560.KS",
     "인텔": "INTC",
     "디웨이브": "QBTS",
     "아이온큐": "IONQ",
@@ -311,6 +318,10 @@ PRESET_THEMES = {
         "description": "거래량 높은 성장·모멘텀 소형주",
         "symbols": ["SOUN", "BBAI", "RKLB", "APLD", "IREN", "ACHR", "JOBY", "LUNR"],
     },
+    "한국주식": {
+        "description": "코스피 대형주 (KOSPI Large Cap)",
+        "symbols": ["삼성전자", "SK하이닉스", "LG에너지솔루션", "현대차", "기아", "네이버", "카카오", "삼성바이오로직스"],
+    },
     "빅테크": {
         "description": "미국 빅테크 (Magnificent 7)",
         "symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
@@ -422,20 +433,25 @@ def execute_theme_analysis(user_id: str, theme_name: str) -> str:
     if not symbols:
         return f"⚠️ '{theme_name}' 테마에 등록된 종목이 없습니다."
 
-    results = []  # (symbol, consensus_pct or None, price or None, action)
+    results = []  # (display_label, consensus_pct or None, price or None, action)
     for raw_sym in symbols:
         norm = normalize_symbol(raw_sym)
+        # Show the human-friendly name for non-ASCII (e.g. Korean) symbols,
+        # otherwise the normalized ticker (NVDA, BTC-USD, ...).
+        display = raw_sym if not raw_sym.isascii() else norm
+        is_krw = norm.endswith(".KS") or norm.endswith(".KQ")
         try:
             res = run_consensus_analysis(norm)
             if "error" in res:
-                results.append((norm, None, None, "DATA_ERR"))
+                results.append((display, None, None, "DATA_ERR"))
                 continue
             pct = res["consensus_pct"]
             action = "BUY" if pct > 15.0 else ("SELL" if pct < -15.0 else "HOLD")
-            results.append((norm, pct, res["cur_p"], action))
+            price_str = f"₩{res['cur_p']:,.0f}" if is_krw else f"${res['cur_p']:,.2f}"
+            results.append((display, pct, price_str, action))
         except Exception as e:
             print(f"⚠️ execute_theme_analysis: {norm} failed: {e}")
-            results.append((norm, None, None, "ERR"))
+            results.append((display, None, None, "ERR"))
 
     # Rank: strongest consensus first; rows without data sink to the bottom.
     results.sort(key=lambda r: (r[1] is None, -(r[1] if r[1] is not None else 0.0)))
@@ -448,7 +464,7 @@ def execute_theme_analysis(user_id: str, theme_name: str) -> str:
         "=" * 35,
     ]
     buy_c = sell_c = hold_c = 0
-    for sym, pct, price, action in results:
+    for sym, pct, price_str, action in results:
         if pct is None:
             lines.append(f"⚪ <b>{sym}</b>: 데이터 조회 실패")
             continue
@@ -459,7 +475,7 @@ def execute_theme_analysis(user_id: str, theme_name: str) -> str:
         else:
             hold_c += 1
         label = {"BUY": "적극 매수", "SELL": "비중 축소", "HOLD": "관망"}[action]
-        lines.append(f"{emoji[action]} <b>{sym}</b>  ${price:,.2f}  →  <b>{label}</b> (합의 {pct:+.1f}%)")
+        lines.append(f"{emoji[action]} <b>{sym}</b>  {price_str}  →  <b>{label}</b> (합의 {pct:+.1f}%)")
 
     lines.append("=" * 35)
     lines.append(f"📊 합계: 🟢 매수 {buy_c} · 🟡 관망 {hold_c} · 🔴 축소 {sell_c}")
