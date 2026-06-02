@@ -287,6 +287,11 @@ def parse_champion_request(text: str) -> bool:
     return text in ["/champion", "/챔피언"]
 
 
+def parse_sector_request(text: str) -> bool:
+    text = text.strip()
+    return text in ["/섹터", "/sector", "/추천섹터", "/섹터추천"]
+
+
 # ----------------- Theme (테마) Feature -----------------
 # A "theme" is a named basket of tickers (e.g. 네오클라우드, 반도체) that the bot
 # can analyze in one shot via the 6-agent consensus engine. Themes are persisted
@@ -502,6 +507,11 @@ def execute_features_summary() -> str:
         "• <b>설명</b>: 관련주를 하나의 테마(예: 네오클라우드, 반도체)로 묶어 종목별 6-Agent 컨센서스를 한 번에 산출하고, 합의지수 순으로 매수/관망/축소를 랭킹합니다.",
         "• <b>사용법</b>: <code>/테마 [이름]</code> | 목록 <code>/테마목록</code> | 등록 <code>/테마등록 [이름]: TICKER1, TICKER2</code> | 삭제 <code>/테마삭제 [이름]</code>",
         "  - <i>예시: /테마 네오클라우드, /테마등록 내포폴: NVDA, CRWV, BTC</i>",
+        "",
+        "🧭 <b>1-3. 섹터 상관관계 학습 & 추천 섹터</b>",
+        "• <b>설명</b>: 11개 GICS 섹터 ETF의 상관관계를 매일 누적 학습하고, 모멘텀·상대강도 기준으로 오늘 비중확대/축소할 섹터와 분산 힌트를 제공합니다. (매일 자동 발송)",
+        "• <b>사용법</b>: <code>/섹터</code> 또는 <code>/sector</code>",
+        "  - <i>예시: /섹터, /추천섹터</i>",
         "",
         "🗣️ <b>2. AI & Human 실시간 토론방</b>",
         "• <b>설명</b>: 해당 종목에 대해 AI 에이전트들과 실시간으로 주식 찬반 의견을 주고받는 토론방을 시작합니다.",
@@ -1585,6 +1595,19 @@ def main():
                     except Exception as e:
                         print(f"⚠️ Error executing infomap request: {e}")
                         reply_to_telegram(chat_id, f"⚠️ 정보맵 시각화 생성 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.990. Parse Sector Recommendation Request
+                if parse_sector_request(text):
+                    print(f"🧭 Received sector recommendation request from chat {chat_id}")
+                    reply_to_telegram(chat_id, "⏳ <b>11개 GICS 섹터 상관관계 학습 및 오늘의 추천 섹터를 산출 중입니다...</b>", message_id)
+                    try:
+                        from sector_correlation import build_sector_report
+                        report = build_sector_report()
+                    except Exception as e:
+                        print(f"⚠️ Error executing sector recommendation: {e}")
+                        report = f"⚠️ 섹터 추천 산출 중 오류가 발생했습니다: {e}"
+                    reply_to_telegram(chat_id, report, message_id)
                     continue
 
                 # 0.991. Parse Theme List Request

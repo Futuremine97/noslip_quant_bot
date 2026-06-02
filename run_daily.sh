@@ -34,4 +34,8 @@ echo "6. Running Multi-Agent Consensus Forum and sending report to Telegram..."
 echo "7. Running Dynamic YouTube/Google Trends Crawler and sending report..."
 ./services/trader/.venv/bin/python services/trader/dynamic_youtube_trends.py
 
+# 8. Learn sector correlations and broadcast the daily recommended-sector message
+echo "8. Learning sector correlations and sending recommended-sector report..."
+./services/trader/.venv/bin/python services/trader/sector_correlation.py
+
 echo "=== [$(date)] S&P500 & Crypto Daily Job Completed ==="
