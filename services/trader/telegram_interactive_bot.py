@@ -299,6 +299,14 @@ PRESET_THEMES = {
         "description": "양자컴퓨팅 관련주",
         "symbols": ["IONQ", "RGTI", "QBTS", "IBM"],
     },
+    "AI": {
+        "description": "AI 핵심 수혜주 (반도체·플랫폼·소프트웨어)",
+        "symbols": ["NVDA", "MSFT", "GOOGL", "META", "AMD", "AVGO", "PLTR", "TSM"],
+    },
+    "바이오": {
+        "description": "대형 제약·바이오테크",
+        "symbols": ["LLY", "JNJ", "MRK", "ABBV", "AMGN", "GILD", "VRTX", "REGN"],
+    },
     "빅테크": {
         "description": "미국 빅테크 (Magnificent 7)",
         "symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
