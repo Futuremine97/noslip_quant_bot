@@ -307,6 +307,10 @@ PRESET_THEMES = {
         "description": "대형 제약·바이오테크",
         "symbols": ["LLY", "JNJ", "MRK", "ABBV", "AMGN", "GILD", "VRTX", "REGN"],
     },
+    "소형주": {
+        "description": "거래량 높은 성장·모멘텀 소형주",
+        "symbols": ["SOUN", "BBAI", "RKLB", "APLD", "IREN", "ACHR", "JOBY", "LUNR"],
+    },
     "빅테크": {
         "description": "미국 빅테크 (Magnificent 7)",
         "symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
