@@ -280,6 +280,184 @@ def parse_champion_request(text: str) -> bool:
     return text in ["/champion", "/챔피언"]
 
 
+# ----------------- Theme (테마) Feature -----------------
+# A "theme" is a named basket of tickers (e.g. 네오클라우드, 반도체) that the bot
+# can analyze in one shot via the 6-agent consensus engine. Themes are persisted
+# per chat through the personal_ontology backend; a set of built-in presets is
+# always available out of the box.
+
+PRESET_THEMES = {
+    "네오클라우드": {
+        "description": "AI GPU 클라우드 인프라 (CoreWeave, Nebius 등 neocloud 및 핵심 공급망)",
+        "symbols": ["NVDA", "CRWV", "NBIS", "SMCI", "VRT", "DELL", "ORCL"],
+    },
+    "반도체": {
+        "description": "AI 반도체 핵심주",
+        "symbols": ["NVDA", "AMD", "AVGO", "TSM", "MU", "INTC"],
+    },
+    "양자컴퓨팅": {
+        "description": "양자컴퓨팅 관련주",
+        "symbols": ["IONQ", "RGTI", "QBTS", "IBM"],
+    },
+    "빅테크": {
+        "description": "미국 빅테크 (Magnificent 7)",
+        "symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
+    },
+    "크립토": {
+        "description": "주요 암호화폐",
+        "symbols": ["BTC", "ETH", "SOL"],
+    },
+}
+
+
+def parse_theme_list_request(text: str) -> bool:
+    return text.strip() in ["/테마목록", "/테마리스트", "/themes", "/theme_list"]
+
+
+def parse_theme_add_request(text: str) -> str:
+    text = text.strip()
+    for prefix in ["/테마등록 ", "/테마추가 ", "/theme_add ", "/themeadd "]:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    return None
+
+
+def parse_theme_delete_request(text: str) -> str:
+    text = text.strip()
+    for prefix in ["/테마삭제 ", "/theme_delete ", "/themedel "]:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    return None
+
+
+def parse_theme_request(text: str) -> str:
+    text = text.strip()
+    for prefix in ["/테마 ", "/theme "]:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    if text.endswith(" 테마분석"):
+        return text[:-len(" 테마분석")].strip()
+    return None
+
+
+def parse_theme_definition(raw: str) -> tuple:
+    """Parse '네오클라우드: NVDA, CRWV, NBIS' (or whitespace-separated) -> (name, [symbols])."""
+    raw = raw.strip()
+    if ":" in raw:
+        name, syms_str = raw.split(":", 1)
+    elif "：" in raw:  # full-width colon
+        name, syms_str = raw.split("：", 1)
+    else:
+        parts = raw.split()
+        name = parts[0] if parts else ""
+        syms_str = " ".join(parts[1:])
+    name = name.strip()
+    symbols = [s.strip().upper() for s in re.split(r"[,\s]+", syms_str.strip()) if s.strip()]
+    return name, symbols
+
+
+def resolve_theme(user_id: str, theme_name: str) -> dict:
+    """Return {'description', 'symbols', 'source'} for a theme, checking saved
+    user themes first then built-in presets. Case-insensitive. None if not found."""
+    target = theme_name.strip().lower()
+    try:
+        from personal_ontology import get_concepts
+        for c in get_concepts(user_id):
+            if c["concept_name"].strip().lower() == target:
+                return {"description": c.get("description", ""), "symbols": c.get("symbols", []), "source": "user"}
+    except Exception as e:
+        print(f"⚠️ resolve_theme: failed reading saved themes: {e}")
+    for name, meta in PRESET_THEMES.items():
+        if name.strip().lower() == target:
+            return {"description": meta["description"], "symbols": list(meta["symbols"]), "source": "preset"}
+    return None
+
+
+def execute_theme_list(user_id: str) -> str:
+    lines = ["🗂️ <b>분석 가능한 테마 목록</b>", "=" * 35]
+    lines.append("📌 <b>기본 제공 테마</b>:")
+    for name, meta in PRESET_THEMES.items():
+        lines.append(f"  • <b>{name}</b> ({len(meta['symbols'])}종목) — {meta['description']}")
+    try:
+        from personal_ontology import get_concepts
+        user_themes = get_concepts(user_id)
+    except Exception:
+        user_themes = []
+    if user_themes:
+        lines.append("")
+        lines.append("⭐ <b>내가 등록한 테마</b>:")
+        for c in user_themes:
+            lines.append(f"  • <b>{c['concept_name']}</b> ({len(c['symbols'])}종목) — {c.get('description','')}")
+    lines.append("=" * 35)
+    lines.append("▶️ 분석: <code>/테마 [이름]</code>  (예: /테마 네오클라우드)")
+    lines.append("➕ 등록: <code>/테마등록 [이름]: TICKER1, TICKER2 ...</code>")
+    lines.append("🗑️ 삭제: <code>/테마삭제 [이름]</code>")
+    return "\n".join(lines)
+
+
+def execute_theme_analysis(user_id: str, theme_name: str) -> str:
+    """Run the 6-agent consensus on every ticker in a theme and return a ranked report."""
+    resolved = resolve_theme(user_id, theme_name)
+    if not resolved:
+        return (
+            f"⚠️ '{theme_name}' 테마를 찾을 수 없습니다.\n"
+            f"<code>/테마목록</code>으로 등록된 테마를 확인하거나, "
+            f"<code>/테마등록 {theme_name}: NVDA, CRWV</code> 형식으로 새로 만들어 주세요."
+        )
+
+    description = resolved["description"]
+    symbols = resolved["symbols"]
+    if not symbols:
+        return f"⚠️ '{theme_name}' 테마에 등록된 종목이 없습니다."
+
+    results = []  # (symbol, consensus_pct or None, price or None, action)
+    for raw_sym in symbols:
+        norm = normalize_symbol(raw_sym)
+        try:
+            res = run_consensus_analysis(norm)
+            if "error" in res:
+                results.append((norm, None, None, "DATA_ERR"))
+                continue
+            pct = res["consensus_pct"]
+            action = "BUY" if pct > 15.0 else ("SELL" if pct < -15.0 else "HOLD")
+            results.append((norm, pct, res["cur_p"], action))
+        except Exception as e:
+            print(f"⚠️ execute_theme_analysis: {norm} failed: {e}")
+            results.append((norm, None, None, "ERR"))
+
+    # Rank: strongest consensus first; rows without data sink to the bottom.
+    results.sort(key=lambda r: (r[1] is None, -(r[1] if r[1] is not None else 0.0)))
+
+    emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡"}
+    lines = [
+        f"🎯 <b>테마 분석: {theme_name}</b>",
+        f"<i>{description}</i>",
+        f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} | 6-Agent 컨센서스",
+        "=" * 35,
+    ]
+    buy_c = sell_c = hold_c = 0
+    for sym, pct, price, action in results:
+        if pct is None:
+            lines.append(f"⚪ <b>{sym}</b>: 데이터 조회 실패")
+            continue
+        if action == "BUY":
+            buy_c += 1
+        elif action == "SELL":
+            sell_c += 1
+        else:
+            hold_c += 1
+        label = {"BUY": "적극 매수", "SELL": "비중 축소", "HOLD": "관망"}[action]
+        lines.append(f"{emoji[action]} <b>{sym}</b>  ${price:,.2f}  →  <b>{label}</b> (합의 {pct:+.1f}%)")
+
+    lines.append("=" * 35)
+    lines.append(f"📊 합계: 🟢 매수 {buy_c} · 🟡 관망 {hold_c} · 🔴 축소 {sell_c}")
+    top = next((r for r in results if r[1] is not None), None)
+    if top and top[1] is not None and top[1] > 15.0:
+        lines.append(f"🏆 최상위 모멘텀: <b>{top[0]}</b> (합의 {top[1]:+.1f}%)")
+    lines.append("\n※ 6인 퀀트 포럼 실시간 스캔. 투자 참고용입니다.")
+    lines.append("🔍 개별 상세: <code>/분석 [티커]</code>")
+    return "\n".join(lines)
+
 
 def execute_features_summary() -> str:
     lines = [
@@ -291,6 +469,11 @@ def execute_features_summary() -> str:
         "• <b>설명</b>: yfinance 데이터 및 매크로 지표를 기반으로 6인의 AI 에이전트(추세, 가치, 수급, 매크로 등)가 포지션을 산출하여 합의 스탠스 리포트를 제공합니다.",
         "• <b>사용법</b>: <code>/분석 [종목명/티커]</code> 또는 <code>[종목명] 분석</code>",
         "  - <i>예시: /분석 삼성전자, /analyze TSLA, 비트코인 분석해줘</i>",
+        "",
+        "🎯 <b>1-2. 테마별 묶음 분석</b>",
+        "• <b>설명</b>: 관련주를 하나의 테마(예: 네오클라우드, 반도체)로 묶어 종목별 6-Agent 컨센서스를 한 번에 산출하고, 합의지수 순으로 매수/관망/축소를 랭킹합니다.",
+        "• <b>사용법</b>: <code>/테마 [이름]</code> | 목록 <code>/테마목록</code> | 등록 <code>/테마등록 [이름]: TICKER1, TICKER2</code> | 삭제 <code>/테마삭제 [이름]</code>",
+        "  - <i>예시: /테마 네오클라우드, /테마등록 내포폴: NVDA, CRWV, BTC</i>",
         "",
         "🗣️ <b>2. AI & Human 실시간 토론방</b>",
         "• <b>설명</b>: 해당 종목에 대해 AI 에이전트들과 실시간으로 주식 찬반 의견을 주고받는 토론방을 시작합니다.",
@@ -1374,6 +1557,61 @@ def main():
                     except Exception as e:
                         print(f"⚠️ Error executing infomap request: {e}")
                         reply_to_telegram(chat_id, f"⚠️ 정보맵 시각화 생성 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.991. Parse Theme List Request
+                if parse_theme_list_request(text):
+                    print(f"🗂️ Received theme list request from chat {chat_id}")
+                    try:
+                        reply_to_telegram(chat_id, execute_theme_list(str(chat_id)), message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error listing themes: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 테마 목록 조회 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.992. Parse Theme Register Request
+                theme_def = parse_theme_add_request(text)
+                if theme_def:
+                    print(f"➕ Received theme register request from chat {chat_id}: {theme_def}")
+                    try:
+                        from personal_ontology import save_concept
+                        name, symbols = parse_theme_definition(theme_def)
+                        if not name or not symbols:
+                            reply_to_telegram(chat_id, "⚠️ 형식을 확인해 주세요: <code>/테마등록 네오클라우드: NVDA, CRWV, NBIS</code>", message_id)
+                        else:
+                            save_concept(str(chat_id), name, f"사용자 등록 테마", symbols, {})
+                            reply_to_telegram(chat_id, f"✅ 테마 <b>{name}</b> 등록 완료 ({len(symbols)}종목: {', '.join(symbols)})\n▶️ <code>/테마 {name}</code> 로 분석하세요.", message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error registering theme: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 테마 등록 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.993. Parse Theme Delete Request
+                theme_del = parse_theme_delete_request(text)
+                if theme_del:
+                    print(f"🗑️ Received theme delete request from chat {chat_id}: {theme_del}")
+                    try:
+                        from personal_ontology import delete_concept
+                        if delete_concept(str(chat_id), theme_del.strip()):
+                            reply_to_telegram(chat_id, f"🗑️ 테마 <b>{theme_del.strip()}</b> 삭제 완료.", message_id)
+                        else:
+                            reply_to_telegram(chat_id, f"⚠️ '{theme_del.strip()}' 테마를 찾을 수 없습니다. (기본 제공 테마는 삭제할 수 없습니다.)", message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error deleting theme: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 테마 삭제 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.994. Parse Theme Analysis Request
+                theme_query = parse_theme_request(text)
+                if theme_query:
+                    print(f"🎯 Received theme analysis request for '{theme_query}' from chat {chat_id}")
+                    reply_to_telegram(chat_id, f"⏳ <b>'{theme_query}' 테마</b> 종목별 6-Agent 컨센서스 분석 중입니다...", message_id)
+                    try:
+                        report = execute_theme_analysis(str(chat_id), theme_query)
+                    except Exception as e:
+                        print(f"⚠️ Error executing theme analysis: {e}")
+                        report = f"⚠️ '{theme_query}' 테마 분석 중 오류가 발생했습니다: {e}"
+                    reply_to_telegram(chat_id, report, message_id)
                     continue
 
                 # 1. Parse Debate Request
