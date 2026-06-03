@@ -69,8 +69,6 @@ SYMBOL_MAPPING = {
     "현대모비스": "012330.KS",
     "kb금융": "105560.KS",
     "인텔": "INTC",
-    "디웨이브": "QBTS",
-    "아이온큐": "IONQ",
     "델": "DELL",
     
     # Cryptos
@@ -90,10 +88,6 @@ SYMBOL_MAPPING = {
     "ada": "ADA-USD",
     "intel": "INTC",
     "intc": "INTC",
-    "dwave": "QBTS",
-    "qbts": "QBTS",
-    "d-wave": "QBTS",
-    "ionq": "IONQ",
     "dell": "DELL"
 }
 
@@ -307,9 +301,9 @@ PRESET_THEMES = {
         "description": "AI 반도체 핵심주",
         "symbols": ["NVDA", "AMD", "AVGO", "TSM", "MU", "INTC"],
     },
-    "양자컴퓨팅": {
-        "description": "양자컴퓨팅 관련주",
-        "symbols": ["IONQ", "RGTI", "QBTS", "IBM"],
+    "재생에너지": {
+        "description": "재생에너지 및 태양광 관련주",
+        "symbols": ["FSLR", "ENPH", "NEE", "CSIQ"],
     },
     "AI": {
         "description": "AI 핵심 수혜주 (반도체·플랫폼·소프트웨어)",

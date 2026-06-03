@@ -101,13 +101,13 @@ def main():
                           },
                           {
                             "name": "configure_personal_ontology",
-                            "description": "Create or update a personalized investment concept: a named basket of symbols plus custom audit rules used later by analyze_by_personal_ontology.\n\nUse this to save a watchlist or thesis (e.g. a 'Quantum Computing' basket) together with the constraints that define a good candidate. Calling it again with an existing concept_name overwrites that concept.\n\nWrites to per-user persistent storage and returns a confirmation of the saved concept. Use get_personal_ontology to review what is stored and delete_personal_ontology_concept to remove it.",
+                            "description": "Create or update a personalized investment concept: a named basket of symbols plus custom audit rules used later by analyze_by_personal_ontology.\n\nUse this to save a watchlist or thesis (e.g. an 'AI Stocks' basket) together with the constraints that define a good candidate. Calling it again with an existing concept_name overwrites that concept.\n\nWrites to per-user persistent storage and returns a confirmation of the saved concept. Use get_personal_ontology to review what is stored and delete_personal_ontology_concept to remove it.",
                             "inputSchema": {
                               "type": "object",
                               "properties": {
                                 "concept_name": {
                                   "type": "string",
-                                  "description": "Unique name identifying the concept; reusing an existing name overwrites it (e.g. 'Quantum Computing', 'Value Tech')."
+                                  "description": "Unique name identifying the concept; reusing an existing name overwrites it (e.g. 'AI Stocks', 'Value Tech')."
                                 },
                                 "description": {
                                   "type": "string",

@@ -8284,7 +8284,6 @@ export default function Page() {
               <ul className="price-features-list">
                 <li><strong>+2000 Prophet credits</strong> on subscribe</li>
                 <li>Custom wrapper agent priority thresholds</li>
-                <li>Quantum Error Correcting (QEC) decoders</li>
                 <li>Exclusive Slack integration</li>
               </ul>
               <button 
