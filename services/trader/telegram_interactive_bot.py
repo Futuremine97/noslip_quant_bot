@@ -293,6 +293,13 @@ def parse_advice_request(text: str) -> bool:
     text = text.strip()
     return text in ["/advice", "/조언", "/조언요청", "/에이전트조언"]
 
+def parse_federated_request(text: str) -> str:
+    text = text.strip()
+    for prefix in ["/federated ", "/연합학습 ", "/federated", "/연합학습"]:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    return None
+
 def parse_gemini_request(text: str) -> str:
     text = text.strip()
     for prefix in ["/gemini ", "/제미나이 ", "/gemini", "/제미나이"]:
@@ -751,6 +758,11 @@ def execute_features_summary() -> str:
         "• <b>설명</b>: 단기 하락을 예측하는 MLP 에이전트들과 리스크 모드를 조율하는 연합 RL 에이전트들이 실시간 가상자산 기류 및 거시 GICS 섹터 수급을 분석하여 현재 리스크 관리 상황과 조언을 전송합니다.",
         "• <b>사용법</b>: <code>/조언</code> 또는 <code>/advice</code>",
         "  - <i>예시: /조언, /advice</i>",
+        "",
+        "👥 <b>16. 연합 전략 공유 및 분산 학습 (Federated Strategy Sharing)</b>",
+        "• <b>설명</b>: 동의한 사용자들의 로컬 매매 성과(Q-table)를 프라이버시가 보호되는 연합 평균화(FedAvg) 알고리즘으로 결합하여 공동의 최적 전략 매개변수를 실시간으로 도출합니다.",
+        "• <b>사용법</b>: <code>/연합학습 [온/오프/동기화]</code> 또는 <code>/federated [on/off/sync]</code>",
+        "  - <i>예시: /연합학습 온, /연합학습 동기화</i>",
         "",
         "=" * 40,
         "※ 본 봇은 지정된 허용 단톡방(Allowlist)에서만 동작하며, 모든 분석은 투자 참고용입니다."
@@ -2012,6 +2024,44 @@ def main():
                     except Exception as e:
                         print(f"⚠️ Error generating agent advice: {e}")
                         reply_to_telegram(chat_id, f"⚠️ 에이전트 조언 생성 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.990.4. Parse Federated Strategy Sharing Request
+                fed_arg = parse_federated_request(text)
+                if fed_arg is not None:
+                    print(f"👥 Received federated sharing request from chat {chat_id}: '{fed_arg}'")
+                    try:
+                        from services.trader.federated_sharing import set_federated_consent, run_federated_aggregation, get_federated_config
+                        
+                        if fed_arg == "온" or fed_arg == "on":
+                            set_federated_consent(True)
+                            reply_to_telegram(chat_id, "✅ <b>연합 전략 공유 동의가 활성화되었습니다.</b>\n이제 다른 봇들과 학습 데이터를 비공개적으로 결합(FedAvg)하여 최적의 Q-테이블 전략을 실시간으로 도출합니다.", message_id)
+                        elif fed_arg == "오프" or fed_arg == "off":
+                            set_federated_consent(False)
+                            reply_to_telegram(chat_id, "❌ <b>연합 전략 공유 동의가 비활성화되었습니다.</b>\n더 이상 전략 가중치를 중앙 서버와 교환하지 않습니다.", message_id)
+                        elif fed_arg == "동기화" or fed_arg == "sync":
+                            reply_to_telegram(chat_id, "⏳ <b>연합 학습 Q-테이블 동기화 단계 수행 중...</b>", message_id)
+                            res_msg = run_federated_aggregation()
+                            reply_to_telegram(chat_id, res_msg, message_id)
+                        else:
+                            # Status/Help check
+                            fed_cfg = get_federated_config()
+                            status_str = "🟢 활성화 (ON)" if fed_cfg.get("consent_granted", False) else "🔴 비활성화 (OFF)"
+                            help_msg = (
+                                f"👥 <b>연합 전략 도출 설정 (Federated Strategy Sharing)</b>\n"
+                                f"="*35 + "\n"
+                                f"동의한 사용자들의 봇들끼리 각자의 매매 성과(Q-table)를 프라이버시를 지키며 중앙에서 평균화(FedAvg)하여 최적의 전략을 도출합니다.\n\n"
+                                f"• <b>현재 설정 상태</b>: {status_str}\n"
+                                f"• <b>사용법</b>:\n"
+                                f"  - <code>/연합학습 온</code> (또는 <code>/federated on</code>)\n"
+                                f"  - <code>/연합학습 오프</code> (또는 <code>/federated off</code>)\n"
+                                f"  - <code>/연합학습 동기화</code> (또는 <code>/federated sync</code>)\n"
+                                f"="*35
+                            )
+                            reply_to_telegram(chat_id, help_msg, message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error executing federated command: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 연합 학습 명령 처리 중 오류 발생: {e}", message_id)
                     continue
 
                 # 0.991. Parse Theme List Request
