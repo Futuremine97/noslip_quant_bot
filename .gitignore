@@ -19,6 +19,8 @@ services/trader/.env
 services/trader/temp/
 services/trader/model_cache/
 services/trader/exports/
+services/trader/federated_rl_agent.py
+services/trader/mlp_drop_predictor.py
 model_cache/
 
 data/runtime/
