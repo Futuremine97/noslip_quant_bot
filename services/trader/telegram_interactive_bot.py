@@ -289,6 +289,10 @@ def parse_ohseon_request(text: str) -> bool:
     text = text.strip()
     return text in ["/ohseon", "/오선", "/시황요약", "/오선요약"]
 
+def parse_advice_request(text: str) -> bool:
+    text = text.strip()
+    return text in ["/advice", "/조언", "/조언요청", "/에이전트조언"]
+
 def parse_gemini_request(text: str) -> str:
     text = text.strip()
     for prefix in ["/gemini ", "/제미나이 ", "/gemini", "/제미나이"]:
@@ -742,6 +746,11 @@ def execute_features_summary() -> str:
         "• <b>설명</b>: No Slip 퀀트 매매 시스템의 설계, 기술적 분석전략(고래수급, 차익거래 등) 및 파라미터 튜닝 등에 관해 인공지능 제미나이와 실시간 대화 및 토론을 진행합니다.",
         "• <b>사용법</b>: <code>/gemini [질문]</code> 또는 <code>/제미나이 [질문]</code>",
         "  - <i>예시: /gemini 고래 수급 전략 임계치 설정 팁을 줘</i>",
+        "",
+        "💡 <b>15. AI 에이전트 시장 분석 및 조언 (Agent Advice)</b>",
+        "• <b>설명</b>: 단기 하락을 예측하는 MLP 에이전트들과 리스크 모드를 조율하는 연합 RL 에이전트들이 실시간 가상자산 기류 및 거시 GICS 섹터 수급을 분석하여 현재 리스크 관리 상황과 조언을 전송합니다.",
+        "• <b>사용법</b>: <code>/조언</code> 또는 <code>/advice</code>",
+        "  - <i>예시: /조언, /advice</i>",
         "",
         "=" * 40,
         "※ 본 봇은 지정된 허용 단톡방(Allowlist)에서만 동작하며, 모든 분석은 투자 참고용입니다."
@@ -1976,6 +1985,33 @@ def main():
                     except Exception as e:
                         print(f"⚠️ Error executing orbit request: {e}")
                         reply_to_telegram(chat_id, f"⚠️ 섹터 오빗 분석 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.990.2. Parse Oh-seon Daily Market Summary Request
+                if parse_ohseon_request(text):
+                    print(f"📺 Received ohseon summary request from chat {chat_id}")
+                    reply_to_telegram(chat_id, "⏳ <b>오선 유튜브 시황 요약 리포트를 생성 중입니다...</b>", message_id)
+                    try:
+                        from ohseon_summary import run_ohseon_summary_pipeline
+                        report = run_ohseon_summary_pipeline()
+                        reply_to_telegram(chat_id, report, message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error executing ohseon summary request: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 시황 요약 생성 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.990.3. Parse Agent Advice Request
+                if parse_advice_request(text):
+                    print(f"🤖 Received agent advice request from chat {chat_id}")
+                    reply_to_telegram(chat_id, "⏳ <b>MLP 및 연합 RL 에이전트들이 시장 분석 후 조언을 구성 중입니다...</b>", message_id)
+                    try:
+                        from services.trader.federated_rl_agent import FederatedRLAgent
+                        agent = FederatedRLAgent()
+                        advice = agent.get_agents_advice()
+                        reply_to_telegram(chat_id, advice, message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error generating agent advice: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 에이전트 조언 생성 중 오류가 발생했습니다: {e}", message_id)
                     continue
 
                 # 0.991. Parse Theme List Request

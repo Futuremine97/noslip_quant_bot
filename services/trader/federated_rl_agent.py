@@ -262,3 +262,91 @@ class FederatedRLAgent:
         except Exception as e:
             print(f"⚠️ [RL Evaluator Error] Failed to evaluate report: {e}")
             return {"score": 75, "rationale": f"평가 엔진 수행 중 일시적 오류 발생 ({e})."}
+
+    def get_agents_advice(self) -> str:
+        """
+        Generate detailed quant trading advice from the perspective of the MLP agents and Federated RL agent.
+        """
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return "⚠️ Gemini API key missing."
+            
+        # Get MLP drop probabilities & thresholds
+        from mlp_drop_predictor import should_halt_due_to_mlp_drop
+        from sector_orbit_learner import run_pipeline
+        from whale_pump_monitor import fetch_recent_klines, load_whale_config
+        
+        config = load_whale_config()
+        
+        probs = {}
+        thresholds = {}
+        for sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT"]:
+            df = fetch_recent_klines(sym, limit=120)
+            _, prob = should_halt_due_to_mlp_drop(sym, df)
+            probs[sym] = prob
+            
+            mlp_cfg = config.get(sym, {}).get("mlp_filter", {})
+            thresholds[sym] = mlp_cfg.get("halt_threshold", 0.50)
+            
+        try:
+            ranked_sectors, _ = run_pipeline()
+            top_sectors_str = ", ".join([f"{s['short_label']} ({s['curr_quadrant']})" for s in ranked_sectors[:3]])
+            top_sector_mom = ranked_sectors[0]["score"] if ranked_sectors else 0.0
+        except Exception:
+            top_sectors_str = "N/A"
+            top_sector_mom = 0.0
+            
+        state_key = self.get_state_key(probs.get("BTCUSDT", 0.0), probs.get("ETHUSDT", 0.0), probs.get("SOLUSDT", 0.0), top_sector_mom)
+        
+        # Load Q-values
+        q_vals = [0.0, 0.0, 0.0]
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT q_action_0, q_action_1, q_action_2 FROM federated_q_table WHERE state_key = ?",
+                (state_key,)
+            ).fetchone()
+            if row:
+                q_vals = list(row)
+                
+        # Current risk mode based on halt threshold in config
+        current_threshold = thresholds.get("BTCUSDT", 0.50)
+        mode_map = {0.50: "일반 리스크 (Normal: 0.50)", 0.45: "보수적 리스크 (Conservative: 0.45)", 0.55: "공격적 리스크 (Aggressive: 0.55)"}
+        current_mode = mode_map.get(current_threshold, f"기타 ({current_threshold:.2f})")
+        
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-flash-latest")
+            
+            prompt = f"""
+당신은 'No Slip Saas' 시스템의 두 핵심 머신러닝 엔진입니다:
+1. 다층 인공신경망(MLP) 단기 하락 예측 에이전트팀 (BTC, ETH, SOL 단기 하락 분석)
+2. 연합 강화학습(Federated RL) 의사결정 에이전트 (Q-table 기반 리스크 파라미터 조율)
+
+사용자(트레이더)가 실시간 시장 상황에 대한 '/조언'을 요청했습니다. 아래 에이전트들의 실시간 분석 데이터를 바탕으로, 각 에이전트의 관점에서 친근하고 전문적인 종합 투자 조언(Advice) 리포트를 작성해 주세요.
+
+[실시간 에이전트 분석 데이터]
+- MLP 단기 하락 확률:
+  • BTCUSDT: {probs.get('BTCUSDT', 0.0)*100:.1f}% (차단 임계치: {thresholds.get('BTCUSDT', 0.5)*100:.1f}%)
+  • ETHUSDT: {probs.get('ETHUSDT', 0.0)*100:.1f}% (차단 임계치: {thresholds.get('ETHUSDT', 0.5)*100:.1f}%)
+  • SOLUSDT: {probs.get('SOLUSDT', 0.0)*100:.1f}% (차단 임계치: {thresholds.get('SOLUSDT', 0.5)*100:.1f}%)
+- GICS 상위 주도 섹터: {top_sectors_str}
+- 연합 RL 에이전트 상태 키: {state_key}
+- 상태별 Q-table 학습값:
+  • Action 0 (Normal - 임계치 50%): {q_vals[0]:.4f}
+  • Action 1 (Conservative - 임계치 45%): {q_vals[1]:.4f}
+  • Action 2 (Aggressive - 임계치 55%): {q_vals[2]:.4f}
+- 현재 적용된 리스크 관리 모드: {current_mode}
+
+[작성 지침]
+1. <b>MLP 하락 예측 에이전트팀의 조언</b>: 현재 3대 코인의 하락 확률 및 차단 여부를 진단하고, 차트 진입에 대한 단기적 주의점을 설명하세요.
+2. <b>연합 RL 에이전트의 조언</b>: 현재 상태 키({state_key})에 매핑된 Q-table 값들을 해석하여, 어떤 리스크 정책(Action 0, 1, 2)이 가장 기대 수익 보상(Reward)이 높고 유리하게 평가되는지 알려주세요.
+3. <b>종합 시장 권고사항</b>: GICS 섹터 흐름(상위 주도 섹터) 등 거시적 수급 동향과 코인 시장의 실시간 기류를 종합하여 사용자에게 추천하는 매매 행동 지침을 제시해 주세요.
+4. <b>어조 & 캐릭터 구성</b>: 두 에이전트가 직접 사용자에게 말하듯이 작성해야 합니다.
+   - 예: "안녕하세요 트레이더님! 🧠 <b>MLP 하락 예측 에이전트팀</b>입니다...", "바통을 이어받아 🤖 <b>연합 RL 에이전트</b>가 분석해 드립니다..." 와 같이 역할 분담을 명확히 하고 친근하고 흥미진진한 말투를 사용하세요.
+5. <b>출력 형식</b>: 텔레그램에서 바로 렌더링되도록 오직 HTML 마크업 태그(<b>, <i>, <code>, <a> 등)만 사용하여 작성해 주세요. (마크다운 특수기호 `*`, `**` 등은 사용하지 마십시오.)
+"""
+            response = model.generate_content(prompt)
+            return response.text.strip()
+        except Exception as e:
+            return f"⚠️ [조언 생성 오류] 에이전트 조언을 생성하는 데 실패했습니다: {e}"
