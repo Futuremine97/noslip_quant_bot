@@ -300,6 +300,24 @@ def run_ohseon_summary_pipeline() -> str:
     # Generate summary with Gemini
     print("🤖 Synthesizing daily summary report with Gemini...")
     report = generate_ohseon_summary_with_gemini(videos, news_context)
+    
+    # Evaluate report with FederatedRLAgent
+    try:
+        from services.trader.federated_rl_agent import FederatedRLAgent
+        agent = FederatedRLAgent()
+        eval_res = agent.score_market_report(report)
+        score = eval_res.get("score", 80)
+        rationale = eval_res.get("rationale", "N/A")
+        
+        evaluation_block = (
+            f"\n\n🤖 <b>[Federated RL Agent Report Evaluation]</b>\n"
+            f"<b>Score:</b> {score}/100\n"
+            f"<b>Feedback:</b> {rationale}"
+        )
+        report += evaluation_block
+    except Exception as e:
+        print(f"⚠️ [Federated RL Evaluation] Failed to evaluate report: {e}")
+        
     return sanitize_telegram_html(report)
 
 

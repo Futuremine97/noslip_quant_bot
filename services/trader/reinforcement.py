@@ -1802,6 +1802,17 @@ def run_daily_reinforcement(
         macbook_snapshot = export_macbook_agent_state(conn)
         conn.commit()
 
+    # Run Federated RL Agent daily training step
+    federated_rl_msg = "Skipped"
+    try:
+        from services.trader.federated_rl_agent import FederatedRLAgent
+        agent = FederatedRLAgent()
+        federated_rl_msg = agent.train_federated_agent_step()
+        print(f"ℹ️ [Federated RL] {federated_rl_msg}")
+    except Exception as e:
+        federated_rl_msg = f"Failed: {e}"
+        print(f"⚠️ [Federated RL] Failed to run step: {e}")
+
     return {
         "runDate": today_market_date(),
         "processedEvents": processed_events,
@@ -1810,6 +1821,7 @@ def run_daily_reinforcement(
         "investorLensSnapshot": snapshot,
         "macbookAgentSnapshot": macbook_snapshot,
         "dbPath": str(REINFORCEMENT_DB_PATH),
+        "federatedRLAgent": federated_rl_msg,
     }
 
 
