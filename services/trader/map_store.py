@@ -255,16 +255,16 @@ def compute_symbol_trajectory_metrics(
                 current_snapshot.get("secondMomentBpPerDay2")
             ),
             "momentum_space_x": _to_float(
-                ((current_snapshot.get("momentumSpace") or {}).get("x"))
+                ((current_snapshot.get("firstCoordinateSpace") or current_snapshot.get("momentumSpace") or {}).get("x"))
             ),
             "momentum_space_y": _to_float(
-                ((current_snapshot.get("momentumSpace") or {}).get("y"))
+                ((current_snapshot.get("firstCoordinateSpace") or current_snapshot.get("momentumSpace") or {}).get("y"))
             ),
             "conviction_space_x": _to_float(
-                ((current_snapshot.get("convictionSpace") or {}).get("x"))
+                ((current_snapshot.get("secondCoordinateSpace") or current_snapshot.get("convictionSpace") or {}).get("x"))
             ),
             "conviction_space_y": _to_float(
-                ((current_snapshot.get("convictionSpace") or {}).get("y"))
+                ((current_snapshot.get("secondCoordinateSpace") or current_snapshot.get("convictionSpace") or {}).get("y"))
             ),
             "uncertainty_ratio": _to_float(current_snapshot.get("uncertaintyRatio")),
             "optimization_score": _to_float(current_snapshot.get("optimizationScore")),
@@ -463,8 +463,8 @@ def persist_information_map_history(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         conn.execute("DELETE FROM map_symbol_snapshots WHERE map_date = ?", (map_date,))
         for point in points:
-            momentum_space = point.get("momentumSpace") or {}
-            conviction_space = point.get("convictionSpace") or {}
+            momentum_space = point.get("firstCoordinateSpace") or point.get("momentumSpace") or {}
+            conviction_space = point.get("secondCoordinateSpace") or point.get("convictionSpace") or {}
             trajectory = point.get("trajectory") or {}
             conn.execute(
                 """

@@ -15,6 +15,13 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+TRADER_DIR = ROOT_DIR / "services" / "trader"
+if str(TRADER_DIR) not in sys.path:
+    sys.path.insert(0, str(TRADER_DIR))
+
+import machine_auth
+
+
 # .env 로드
 load_dotenv(dotenv_path=ROOT_DIR / ".env")
 
@@ -65,7 +72,7 @@ def init_db():
             conn.execute("ALTER TABLE whale_trade_log ADD COLUMN strategy TEXT NOT NULL DEFAULT 'whale_pump'")
         conn.commit()
 
-def send_telegram_message(text: str) -> bool:
+def send_telegram_message(text: str, strategy: str = None) -> bool:
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_ids_str = os.getenv("TELEGRAM_CHAT_ID")
     
@@ -76,8 +83,15 @@ def send_telegram_message(text: str) -> bool:
     chat_ids = [cid.strip() for cid in chat_ids_str.split(",") if cid.strip()]
     success = True
     
+    from personal_ontology import is_alert_allowed
+    
     import urllib.request
     for cid in chat_ids:
+        # Check if alert is allowed for this chat & strategy
+        if strategy and not is_alert_allowed(cid, strategy):
+            print(f"🚫 [Telegram Bypass] Strategy '{strategy}' is disabled for chat {cid}")
+            continue
+            
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         payload = {
             "chat_id": cid,
@@ -225,6 +239,55 @@ def fetch_bybit_price(symbol: str) -> float:
             return float(data["result"]["list"][0]["lastPrice"])
     except Exception as e:
         print(f"⚠️ Failed to fetch Bybit price for {symbol}: {e}")
+    return 0.0
+
+def fetch_bithumb_price(symbol: str) -> float:
+    """Fetch the latest price for a symbol from Bithumb Spot in USD."""
+    symbol_map = {
+        "BTCUSDT": "BTC",
+        "ETHUSDT": "ETH",
+        "SOLUSDT": "SOL"
+    }
+    target = symbol_map.get(symbol)
+    if not target:
+        return 0.0
+    try:
+        url = f"https://api.bithumb.com/public/ticker/{target}_KRW"
+        res = requests.get(url, timeout=5)
+        res.raise_for_status()
+        data = res.json()
+        if data.get("status") == "0000" and "data" in data:
+            closing_price = float(data["data"]["closing_price"])
+            rate = get_usd_krw_rate()
+            return closing_price / rate if rate > 0 else 0.0
+    except Exception as e:
+        print(f"⚠️ Failed to fetch Bithumb price for {symbol}: {e}")
+    return 0.0
+
+def fetch_coinone_price(symbol: str) -> float:
+    """Fetch the latest price for a symbol from Coinone Spot in USD."""
+    symbol_map = {
+        "BTCUSDT": "BTC",
+        "ETHUSDT": "ETH",
+        "SOLUSDT": "SOL"
+    }
+    target = symbol_map.get(symbol)
+    if not target:
+        return 0.0
+    try:
+        url = f"https://api.coinone.co.kr/public/v2/ticker_new/KRW/{target}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        res = requests.get(url, headers=headers, timeout=5)
+        res.raise_for_status()
+        data = res.json()
+        if data.get("result") == "success" and data.get("tickers"):
+            last_price = float(data["tickers"][0]["last"])
+            rate = get_usd_krw_rate()
+            return last_price / rate if rate > 0 else 0.0
+    except Exception as e:
+        print(f"⚠️ Failed to fetch Coinone price for {symbol}: {e}")
     return 0.0
 
 def send_hourly_quant_report():
@@ -535,6 +598,20 @@ def check_and_resolve_pending_trades():
                     symbol_config["kimchi_arbitrage"] = strategy_config
                     config[symbol] = symbol_config
                     save_whale_config(config)
+                elif strategy == "three_way_arbitrage":
+                    strategy_config = symbol_config.get("three_way_arbitrage", {"spread_trigger": 0.15, "H": 10, "SL": 0.5, "TP": 0.3})
+                    old_spread_trigger = float(strategy_config.get("spread_trigger", 0.15))
+                    if reward < 0:
+                        new_spread_trigger = min(0.5, old_spread_trigger + 0.01)
+                        strategy_config["spread_trigger"] = round(new_spread_trigger, 3)
+                        rl_note = f"❌ <b>손실 패널티 적용 (3자간 차익)</b>: Spread Trigger: {old_spread_trigger}% ➡️ {new_spread_trigger}%"
+                    else:
+                        new_spread_trigger = max(0.08, old_spread_trigger - 0.002)
+                        strategy_config["spread_trigger"] = round(new_spread_trigger, 3)
+                        rl_note = f"✨ <b>수익 강화 적용 (3자간 차익)</b>: Spread Trigger: {old_spread_trigger}% ➡️ {new_spread_trigger}%"
+                    symbol_config["three_way_arbitrage"] = strategy_config
+                    config[symbol] = symbol_config
+                    save_whale_config(config)
                 
                 # Broadcast results to Telegram
                 display_sym = symbol.replace("USDT", "")
@@ -545,7 +622,8 @@ def check_and_resolve_pending_trades():
                     "macd_crossover": "MACD 골든크로스",
                     "bb_breakout": "BB 변동성 돌파",
                     "spot_arbitrage": "거래소 차익거래",
-                    "kimchi_arbitrage": "김치프리미엄 차익거래"
+                    "kimchi_arbitrage": "김치프리미엄 차익거래",
+                    "three_way_arbitrage": "3자간 차익거래"
                 }
                 strat_disp = strat_display_names.get(strategy, strategy)
                 
@@ -622,6 +700,20 @@ def check_consensus_for_signal(symbol: str, strategy: str) -> tuple:
         print(f"⚠️ [Consensus Check Exception] {e}")
         return False, ""
 
+def check_mlp_and_trigger_trade(symbol, current_price, M, X, V, H, SL, TP, strategy, df, now, last_alert_times) -> bool:
+    from mlp_drop_predictor import should_halt_due_to_mlp_drop
+    halt, prob = should_halt_due_to_mlp_drop(symbol, df)
+    if halt:
+        print(f"🚫 [MLP Filter] Blocked trade for {symbol} {strategy}. Drop Prob: {prob:.2%}")
+        last_alert_times[(symbol, strategy)] = now
+        # Telegram alert disabled to prevent excessive notification spam
+        return False
+    else:
+        last_alert_times[(symbol, strategy)] = now
+        trigger_trade(symbol, current_price, M, X, V, H, SL, TP, strategy)
+        return True
+
+
 def check_signals_for_symbol(symbol: str, config: dict):
     symbol_config = config.get(symbol, {})
     if not symbol_config:
@@ -690,33 +782,31 @@ def check_signals_for_symbol(symbol: str, config: dict):
         if now - last_alert >= ALERT_COOLDOWN_SECONDS:
             is_approved, consensus_badge = check_consensus_for_signal(symbol, strategy_whale)
             if is_approved:
-                last_alert_times[(symbol, strategy_whale)] = now
-                trigger_trade(symbol, current_price, M, X, vol_ratio, H_whale, SL_whale, TP_whale, strategy_whale)
-                
-                tp_price = current_price * (1.0 + TP_whale / 100.0)
-                sl_price = current_price * (1.0 - SL_whale / 100.0)
-                emoji = "🐳" if display_sym in ["BTC", "ETH"] else "⚡"
-                
-                lines = [
-                    f"{emoji} <b>[No Slip Whale] 고래 수급 유입 포착 ({display_sym})</b>",
-                    "=" * 40,
-                    f"🔥 <b>{display_sym} 실시간 급등 감지</b>",
-                    f"  • 현재가: ${current_price:,.2f}",
-                    f"  • <b>진입 사유</b>: {M}분 전 가격 대비 +{price_change:.2f}% 급등 (기준 {X}%) 및 거래량이 30분 평균 대비 {vol_ratio:.1f}배 급증 (기준 {V}x)",
-                    f"  • <b>매매 전략</b>: 고래 수급 추격 매수 전략 (Whale Momentum Breakout)",
-                    f"  • <b>핵심 근거</b>: 거래량이 동반된 단기 주가 폭증은 세력(고래)의 대규모 시장가 매집 신호이며, 단기 추세 상승 지속 가능성이 극대화되는 타점입니다.",
-                    f"\n{consensus_badge}",
-                    "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
-                    f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
-                    f"  • <b>익절 목표가 (+{TP_whale}%)</b>: ${tp_price:,.2f}",
-                    f"  • <b>손절 가격 (-{SL_whale}%)</b>: ${sl_price:,.2f}",
-                    f"  • <b>추천 보유 시간</b>: 최대 {H_whale}분",
-                    "\n💡 <b>알림 해석 가이드</b>",
-                    "• 갑작스러운 가격 상승과 거래량 동반은 고래가 대규모 시장가 주문을 집행한 신호입니다. 수치와 배수가 높을수록 돌파 성공률이 높습니다.",
-                    "\n" + "=" * 40,
-                    f"※ 본 알림은 1분 단위 고래 거래량 급증 포착 알고리즘에 의해 발송됩니다."
-                ]
-                send_telegram_message("\n".join(lines))
+                if check_mlp_and_trigger_trade(symbol, current_price, M, X, vol_ratio, H_whale, SL_whale, TP_whale, strategy_whale, df, now, last_alert_times):
+                    tp_price = current_price * (1.0 + TP_whale / 100.0)
+                    sl_price = current_price * (1.0 - SL_whale / 100.0)
+                    emoji = "🐳" if display_sym in ["BTC", "ETH"] else "⚡"
+                    
+                    lines = [
+                        f"{emoji} <b>[No Slip Whale] 고래 수급 유입 포착 ({display_sym})</b>",
+                        "=" * 40,
+                        f"🔥 <b>{display_sym} 실시간 급등 감지</b>",
+                        f"  • 현재가: ${current_price:,.2f}",
+                        f"  • <b>진입 사유</b>: {M}분 전 가격 대비 +{price_change:.2f}% 급등 (기준 {X}%) 및 거래량이 30분 평균 대비 {vol_ratio:.1f}배 급증 (기준 {V}x)",
+                        f"  • <b>매매 전략</b>: 고래 수급 추격 매수 전략 (Whale Momentum Breakout)",
+                        f"  • <b>핵심 근거</b>: 거래량이 동반된 단기 주가 폭증은 세력(고래)의 대규모 시장가 매집 신호이며, 단기 추세 상승 지속 가능성이 극대화되는 타점입니다.",
+                        f"\n{consensus_badge}",
+                        "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
+                        f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
+                        f"  • <b>익절 목표가 (+{TP_whale}%)</b>: ${tp_price:,.2f}",
+                        f"  • <b>손절 가격 (-{SL_whale}%)</b>: ${sl_price:,.2f}",
+                        f"  • <b>추천 보유 시간</b>: 최대 {H_whale}분",
+                        "\n💡 <b>알림 해석 가이드</b>",
+                        "• 갑작스러운 가격 상승과 거래량 동반은 고래가 대규모 시장가 주문을 집행한 신호입니다. 수치와 배수가 높을수록 돌파 성공률이 높습니다.",
+                        "\n" + "=" * 40,
+                        f"※ 본 알림은 1분 단위 고래 거래량 급증 포착 알고리즘에 의해 발송됩니다."
+                    ]
+                    send_telegram_message("\n".join(lines), strategy=strategy_whale)
             
     # ------------------ Strategy 2: RSI Reversion ------------------
     strategy_rsi = "rsi_reversion"
@@ -734,32 +824,30 @@ def check_signals_for_symbol(symbol: str, config: dict):
         if now - last_alert >= ALERT_COOLDOWN_SECONDS:
             is_approved, consensus_badge = check_consensus_for_signal(symbol, strategy_rsi)
             if is_approved:
-                last_alert_times[(symbol, strategy_rsi)] = now
-                trigger_trade(symbol, current_price, 0, rsi_trigger, curr_rsi, H_rsi, SL_rsi, TP_rsi, strategy_rsi)
-                
-                tp_price = current_price * (1.0 + TP_rsi / 100.0)
-                sl_price = current_price * (1.0 - SL_rsi / 100.0)
-                
-                lines = [
-                    f"🟢 <b>[No Slip RSI] 과매도 반등 시그널 포착 ({display_sym})</b>",
-                    "=" * 40,
-                    f"📈 <b>{display_sym} 과매도 권역 반등 감지</b>",
-                    f"  • 현재가: ${current_price:,.2f}",
-                    f"  • <b>진입 사유</b>: RSI(14)가 {curr_rsi:.1f}로 과매도 기준치인 {rsi_trigger} 이하로 급락 후 상승 전환 반등 (직전 RSI: {prev_rsi:.1f})",
-                    f"  • <b>매매 전략</b>: RSI 과매도 회귀 전략 (RSI Mean Reversion)",
-                    f"  • <b>핵심 근거</b>: 주가가 과매도 국면에 접어든 상태에서 저점 매수세가 유입되어 RSI가 상승 반전하는 것은 하락세가 진정되고 기술적 반등이 개시되는 대표적인 전환 타점입니다.",
-                    f"\n{consensus_badge}",
-                    "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
-                    f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
-                    f"  • <b>익절 목표가 (+{TP_rsi}%)</b>: ${tp_price:,.2f}",
-                    f"  • <b>손절 가격 (-{SL_rsi}%)</b>: ${sl_price:,.2f}",
-                    f"  • <b>추천 보유 시간</b>: 최대 {H_rsi}분",
-                    "\n💡 <b>알림 해석 가이드</b>",
-                    "• RSI 과매도 구간(일반적으로 30 이하)에서의 주가 반등은 단기 투매 진정 및 저가 매수세 유입을 뜻하며, 높은 확률로 단기 기술적 반등을 이끌어냅니다.",
-                    "\n" + "=" * 40,
-                    f"※ 본 알림은 1분 단위 RSI 과매도 회귀 포착 알고리즘에 의해 발송됩니다."
-                ]
-                send_telegram_message("\n".join(lines))
+                if check_mlp_and_trigger_trade(symbol, current_price, 0, rsi_trigger, curr_rsi, H_rsi, SL_rsi, TP_rsi, strategy_rsi, df, now, last_alert_times):
+                    tp_price = current_price * (1.0 + TP_rsi / 100.0)
+                    sl_price = current_price * (1.0 - SL_rsi / 100.0)
+                    
+                    lines = [
+                        f"🟢 <b>[No Slip RSI] 과매도 반등 시그널 포착 ({display_sym})</b>",
+                        "=" * 40,
+                        f"📈 <b>{display_sym} 과매도 권역 반등 감지</b>",
+                        f"  • 현재가: ${current_price:,.2f}",
+                        f"  • <b>진입 사유</b>: RSI(14)가 {curr_rsi:.1f}로 과매도 기준치인 {rsi_trigger} 이하로 급락 후 상승 전환 반등 (직전 RSI: {prev_rsi:.1f})",
+                        f"  • <b>매매 전략</b>: RSI 과매도 회귀 전략 (RSI Mean Reversion)",
+                        f"  • <b>핵심 근거</b>: 주가가 과매도 국면에 접어든 상태에서 저점 매수세가 유입되어 RSI가 상승 반전하는 것은 하락세가 진정되고 기술적 반등이 개시되는 대표적인 전환 타점입니다.",
+                        f"\n{consensus_badge}",
+                        "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
+                        f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
+                        f"  • <b>익절 목표가 (+{TP_rsi}%)</b>: ${tp_price:,.2f}",
+                        f"  • <b>손절 가격 (-{SL_rsi}%)</b>: ${sl_price:,.2f}",
+                        f"  • <b>추천 보유 시간</b>: 최대 {H_rsi}분",
+                        "\n💡 <b>알림 해석 가이드</b>",
+                        "• RSI 과매도 구간(일반적으로 30 이하)에서의 주가 반등은 단기 투매 진정 및 저가 매수세 유입을 뜻하며, 높은 확률로 단기 기술적 반등을 이끌어냅니다.",
+                        "\n" + "=" * 40,
+                        f"※ 본 알림은 1분 단위 RSI 과매도 회귀 포착 알고리즘에 의해 발송됩니다."
+                    ]
+                    send_telegram_message("\n".join(lines), strategy=strategy_rsi)
 
     # ------------------ Strategy 3: MACD Crossover ------------------
     strategy_macd = "macd_crossover"
@@ -781,32 +869,30 @@ def check_signals_for_symbol(symbol: str, config: dict):
         if now - last_alert >= ALERT_COOLDOWN_SECONDS:
             is_approved, consensus_badge = check_consensus_for_signal(symbol, strategy_macd)
             if is_approved:
-                last_alert_times[(symbol, strategy_macd)] = now
-                trigger_trade(symbol, current_price, 0, vol_confirm, vol_ratio_macd, H_macd, SL_macd, TP_macd, strategy_macd)
-                
-                tp_price = current_price * (1.0 + TP_macd / 100.0)
-                sl_price = current_price * (1.0 - SL_macd / 100.0)
-                
-                lines = [
-                    f"🚀 <b>[No Slip MACD] 골든크로스 상승 전환 포착 ({display_sym})</b>",
-                    "=" * 40,
-                    f"📈 <b>{display_sym} 추세 상승 반전 감지</b>",
-                    f"  • 현재가: ${current_price:,.2f}",
-                    f"  • <b>진입 사유</b>: MACD 지표선({curr_macd:.4f})이 Signal선({curr_signal:.4f})을 골든크로스 돌파 및 거래량 {vol_ratio_macd:.1f}배 동반(기준 {vol_confirm}x)",
-                    f"  • <b>매매 전략</b>: MACD 추세 추종 돌파 전략 (MACD Momentum Follower)",
-                    f"  • <b>핵심 근거</b>: MACD 골든크로스는 중단기 하락 추세가 상승으로 복귀하는 강력한 전환점이며, 거래량 증가가 동반되어 휩소(가짜 돌파) 가능성이 최소화된 타점입니다.",
-                    f"\n{consensus_badge}",
-                    "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
-                    f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
-                    f"  • <b>익절 목표가 (+{TP_macd}%)</b>: ${tp_price:,.2f}",
-                    f"  • <b>손절 가격 (-{SL_macd}%)</b>: ${sl_price:,.2f}",
-                    f"  • <b>추천 보유 시간</b>: 최대 {H_macd}분",
-                    "\n💡 <b>알림 해석 가이드</b>",
-                    "• MACD 골든크로스는 중단기 추세가 하락에서 상승으로 공식 전환됨을 나타내며, 수급(거래량)의 증가와 수평 결합될 때 신뢰도가 극대화됩니다.",
-                    "\n" + "=" * 40,
-                    f"※ 본 알림은 1분 단위 MACD Golden Cross 포착 알고리즘에 의해 발송됩니다."
-                ]
-                send_telegram_message("\n".join(lines))
+                if check_mlp_and_trigger_trade(symbol, current_price, 0, vol_confirm, vol_ratio_macd, H_macd, SL_macd, TP_macd, strategy_macd, df, now, last_alert_times):
+                    tp_price = current_price * (1.0 + TP_macd / 100.0)
+                    sl_price = current_price * (1.0 - SL_macd / 100.0)
+                    
+                    lines = [
+                        f"🚀 <b>[No Slip MACD] 골든크로스 상승 전환 포착 ({display_sym})</b>",
+                        "=" * 40,
+                        f"📈 <b>{display_sym} 추세 상승 반전 감지</b>",
+                        f"  • 현재가: ${current_price:,.2f}",
+                        f"  • <b>진입 사유</b>: MACD 지표선({curr_macd:.4f})이 Signal선({curr_signal:.4f})을 골든크로스 돌파 및 거래량 {vol_ratio_macd:.1f}배 동반(기준 {vol_confirm}x)",
+                        f"  • <b>매매 전략</b>: MACD 추세 추종 돌파 전략 (MACD Momentum Follower)",
+                        f"  • <b>핵심 근거</b>: MACD 골든크로스는 중단기 하락 추세가 상승으로 복귀하는 강력한 전환점이며, 거래량 증가가 동반되어 휩소(가짜 돌파) 가능성이 최소화된 타점입니다.",
+                        f"\n{consensus_badge}",
+                        "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
+                        f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
+                        f"  • <b>익절 목표가 (+{TP_macd}%)</b>: ${tp_price:,.2f}",
+                        f"  • <b>손절 가격 (-{SL_macd}%)</b>: ${sl_price:,.2f}",
+                        f"  • <b>추천 보유 시간</b>: 최대 {H_macd}분",
+                        "\n💡 <b>알림 해석 가이드</b>",
+                        "• MACD 골든크로스는 중단기 추세가 하락에서 상승으로 공식 전환됨을 나타내며, 수급(거래량)의 증가와 수평 결합될 때 신뢰도가 극대화됩니다.",
+                        "\n" + "=" * 40,
+                        f"※ 본 알림은 1분 단위 MACD Golden Cross 포착 알고리즘에 의해 발송됩니다."
+                    ]
+                    send_telegram_message("\n".join(lines), strategy=strategy_macd)
 
     # ------------------ Strategy 4: Bollinger Band Breakout ------------------
     strategy_bb = "bb_breakout"
@@ -831,32 +917,30 @@ def check_signals_for_symbol(symbol: str, config: dict):
         if now - last_alert >= ALERT_COOLDOWN_SECONDS:
             is_approved, consensus_badge = check_consensus_for_signal(symbol, strategy_bb)
             if is_approved:
-                last_alert_times[(symbol, strategy_bb)] = now
-                trigger_trade(symbol, current_price, 0, squeeze_ratio, curr_bandwidth, H_bb, SL_bb, TP_bb, strategy_bb)
-                
-                tp_price = current_price * (1.0 + TP_bb / 100.0)
-                sl_price = current_price * (1.0 - SL_bb / 100.0)
-                
-                lines = [
-                    f"💥 <b>[No Slip BB] 변동성 수축 돌파 포착 ({display_sym})</b>",
-                    "=" * 40,
-                    f"📈 <b>{display_sym} 볼린저 밴드 상단 돌파</b>",
-                    f"  • 현재가: ${current_price:,.2f}",
-                    f"  • <b>진입 사유</b>: 볼린저 밴드 대역폭(Bandwidth)이 {curr_bandwidth*100:.2f}%로 30분 최저치 대비 수축 조건({squeeze_ratio:.2f}x) 충족 후 종가가 상단 밴드(${curr_upper:,.2f}) 돌파",
-                    f"  • <b>매매 전략</b>: 볼린저 밴드 수축 및 밴드상단 돌파 전략 (BB Squeeze Breakout)",
-                    f"  • <b>핵심 근거</b>: 횡보로 인해 밴드가 극도로 수축한 것은 시세 분출 에너지가 응축되었음을 의미하며, 이 상태에서 밴드 상단 돌파는 강력한 방향성 랠리의 신호탄입니다.",
-                    f"\n{consensus_badge}",
-                    "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
-                    f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
-                    f"  • <b>익절 목표가 (+{TP_bb}%)</b>: ${tp_price:,.2f}",
-                    f"  • <b>손절 가격 (-{SL_bb}%)</b>: ${sl_price:,.2f}",
-                    f"  • <b>추천 보유 시간</b>: 최대 {H_bb}분",
-                    "\n💡 <b>알림 해석 가이드</b>",
-                    "• 주가가 오랜 횡보를 거치며 볼린저 밴드가 극도로 수축한 후(Squeeze), 밴드 상단 돌파는 강력한 새 추세 랠리의 시작점(Breakout) 역할을 합니다.",
-                    "\n" + "=" * 40,
-                    f"※ 본 알림은 1분 단위 Bollinger Band Squeeze 돌파 포착 알고리즘에 의해 발송됩니다."
-                ]
-                send_telegram_message("\n".join(lines))
+                if check_mlp_and_trigger_trade(symbol, current_price, 0, squeeze_ratio, curr_bandwidth, H_bb, SL_bb, TP_bb, strategy_bb, df, now, last_alert_times):
+                    tp_price = current_price * (1.0 + TP_bb / 100.0)
+                    sl_price = current_price * (1.0 - SL_bb / 100.0)
+                    
+                    lines = [
+                        f"💥 <b>[No Slip BB] 변동성 수축 돌파 포착 ({display_sym})</b>",
+                        "=" * 40,
+                        f"📈 <b>{display_sym} 볼린저 밴드 상단 돌파</b>",
+                        f"  • 현재가: ${current_price:,.2f}",
+                        f"  • <b>진입 사유</b>: 볼린저 밴드 대역폭(Bandwidth)이 {curr_bandwidth*100:.2f}%로 30분 최저치 대비 수축 조건({squeeze_ratio:.2f}x) 충족 후 종가가 상단 밴드(${curr_upper:,.2f}) 돌파",
+                        f"  • <b>매매 전략</b>: 볼린저 밴드 수축 및 밴드상단 돌파 전략 (BB Squeeze Breakout)",
+                        f"  • <b>핵심 근거</b>: 횡보로 인해 밴드가 극도로 수축한 것은 시세 분출 에너지가 응축되었음을 의미하며, 이 상태에서 밴드 상단 돌파는 강력한 방향성 랠리의 신호탄입니다.",
+                        f"\n{consensus_badge}",
+                        "\n<b>🎯 추격매수 시뮬레이션 매매 타겟</b>",
+                        f"  • <b>추천 진입가</b>: ${current_price:,.2f} (즉시 매수)",
+                        f"  • <b>익절 목표가 (+{TP_bb}%)</b>: ${tp_price:,.2f}",
+                        f"  • <b>손절 가격 (-{SL_bb}%)</b>: ${sl_price:,.2f}",
+                        f"  • <b>추천 보유 시간</b>: 최대 {H_bb}분",
+                        "\n💡 <b>알림 해석 가이드</b>",
+                        "• 주가가 오랜 횡보를 거치며 볼린저 밴드가 극도로 수축한 후(Squeeze), 밴드 상단 돌파는 강력한 새 추세 랠리의 시작점(Breakout) 역할을 합니다.",
+                        "\n" + "=" * 40,
+                        f"※ 본 알림은 1분 단위 Bollinger Band Squeeze 돌파 포착 알고리즘에 의해 발송됩니다."
+                    ]
+                    send_telegram_message("\n".join(lines), strategy=strategy_bb)
 
     # ------------------ Strategy 5: Spot Exchange Arbitrage ------------------
     strategy_spot_arb = "spot_arbitrage"
@@ -875,41 +959,39 @@ def check_signals_for_symbol(symbol: str, config: dict):
         if abs_spread >= spread_trigger:
             last_alert = last_alert_times.get((symbol, strategy_spot_arb), 0)
             if now - last_alert >= ALERT_COOLDOWN_SECONDS:
-                last_alert_times[(symbol, strategy_spot_arb)] = now
-                trigger_trade(symbol, current_price, 0, spread_trigger, spread, H_spot_arb, SL_spot_arb, TP_spot_arb, strategy_spot_arb)
-                
-                # Exits targets (simulation tracks directional TP/SL)
-                tp_price = current_price * (1.0 + TP_spot_arb / 100.0) if spread > 0 else current_price * (1.0 - TP_spot_arb / 100.0)
-                sl_price = current_price * (1.0 - SL_spot_arb / 100.0) if spread > 0 else current_price * (1.0 + SL_spot_arb / 100.0)
-                
-                direction = "Binance 매도 (Short) ➡️ Bybit 매수 (Long)" if spread > 0 else "Binance 매수 (Long) ➡️ Bybit 매도 (Short)"
-                cheap_ex = "Bybit" if spread > 0 else "Binance"
-                exp_ex = "Binance" if spread > 0 else "Bybit"
-                cheap_p = bybit_price if spread > 0 else current_price
-                exp_p = current_price if spread > 0 else bybit_price
-                
-                lines = [
-                    f"⚖️ <b>[No Slip Arbitrage] 거래소간 차익 거래 포착 ({display_sym})</b>",
-                    "=" * 40,
-                    f"🔥 <b>{display_sym} 글로벌 거래소간 가격 괴리 발생</b>",
-                    f"  • Binance 가격: ${current_price:,.2f}",
-                    f"  • Bybit 가격: ${bybit_price:,.2f}",
-                    f"  • <b>현재 스프레드</b>: <b>{spread:+.3f}%</b> (기준치: {spread_trigger}%)",
-                    f"  • <b>진입 사유</b>: 두 거래소간 시세 괴리가 {abs_spread:.3f}%까지 확대되어 차익 발생",
-                    f"  • <b>매매 전략</b>: 글로벌 현물간 무위험 차익거래 (Spot-Spot Arbitrage)",
-                    f"  • <b>핵심 근거</b>: 동일 기초자산에 대해 다른 거래소간 시세가 단기 왜곡될 경우, 저평가 거래소에서 매수하고 고평가 거래소에서 매도하여 괴리 수렴 시 무위험 수익을 획득합니다.",
-                    "\n<b>🎯 차익거래 실행 방향 가이드</b>",
-                    f"  • <b>실행 방향</b>: {direction}",
-                    f"  • <b>매수 처 ({cheap_ex})</b>: ${cheap_p:,.2f}",
-                    f"  • <b>매도 처 ({exp_ex})</b>: ${exp_p:,.2f}",
-                    f"  • <b>목표 익절값 ({TP_spot_arb}%)</b>: 스프레드 {TP_spot_arb}% 수렴 또는 역전 시 전량 청산",
-                    f"  • <b>최대 홀딩시간</b>: {H_spot_arb}분",
-                    "\n💡 <b>알림 해석 가이드</b>",
-                    "• 차익 거래 알림 수신 시 즉시 저평가 거래소에서 매수하고 고평가 거래소에서 매도(혹은 선물 매도 헷징)를 진입합니다. 수렴이 빠르게 완료되므로 신속한 집행이 생명입니다.",
-                    "\n" + "=" * 40,
-                    f"※ 본 알림은 1분 단위 Binance-Bybit 실시간 시세 괴리 스캔 엔진에 의해 발송됩니다."
-                ]
-                send_telegram_message("\n".join(lines))
+                if check_mlp_and_trigger_trade(symbol, current_price, 0, spread_trigger, spread, H_spot_arb, SL_spot_arb, TP_spot_arb, strategy_spot_arb, df, now, last_alert_times):
+                    # Exits targets (simulation tracks directional TP/SL)
+                    tp_price = current_price * (1.0 + TP_spot_arb / 100.0) if spread > 0 else current_price * (1.0 - TP_spot_arb / 100.0)
+                    sl_price = current_price * (1.0 - SL_spot_arb / 100.0) if spread > 0 else current_price * (1.0 + SL_spot_arb / 100.0)
+                    
+                    direction = "Binance 매도 (Short) ➡️ Bybit 매수 (Long)" if spread > 0 else "Binance 매수 (Long) ➡️ Bybit 매도 (Short)"
+                    cheap_ex = "Bybit" if spread > 0 else "Binance"
+                    exp_ex = "Binance" if spread > 0 else "Bybit"
+                    cheap_p = bybit_price if spread > 0 else current_price
+                    exp_p = current_price if spread > 0 else bybit_price
+                    
+                    lines = [
+                        f"⚖️ <b>[No Slip Arbitrage] 거래소간 차익 거래 포착 ({display_sym})</b>",
+                        "=" * 40,
+                        f"🔥 <b>{display_sym} 글로벌 거래소간 가격 괴리 발생</b>",
+                        f"  • Binance 가격: ${current_price:,.2f}",
+                        f"  • Bybit 가격: ${bybit_price:,.2f}",
+                        f"  • <b>현재 스프레드</b>: <b>{spread:+.3f}%</b> (기준치: {spread_trigger}%)",
+                        f"  • <b>진입 사유</b>: 두 거래소간 시세 괴리가 {abs_spread:.3f}%까지 확대되어 차익 발생",
+                        f"  • <b>매매 전략</b>: 글로벌 현물간 무위험 차익거래 (Spot-Spot Arbitrage)",
+                        f"  • <b>핵심 근거</b>: 동일 기초자산에 대해 다른 거래소간 시세가 단기 왜곡될 경우, 저평가 거래소에서 매수하고 고평가 거래소에서 매도하여 괴리 수렴 시 무위험 수익을 획득합니다.",
+                        "\n<b>🎯 차익거래 실행 방향 가이드</b>",
+                        f"  • <b>실행 방향</b>: {direction}",
+                        f"  • <b>매수 처 ({cheap_ex})</b>: ${cheap_p:,.2f}",
+                        f"  • <b>매도 처 ({exp_ex})</b>: ${exp_p:,.2f}",
+                        f"  • <b>목표 익절값 ({TP_spot_arb}%)</b>: 스프레드 {TP_spot_arb}% 수렴 또는 역전 시 전량 청산",
+                        f"  • <b>최대 홀딩시간</b>: {H_spot_arb}분",
+                        "\n💡 <b>알림 해석 가이드</b>",
+                        "• 차익 거래 알림 수신 시 즉시 저평가 거래소에서 매수하고 고평가 거래소에서 매도(혹은 선물 매도 헷징)를 진입합니다. 수렴이 빠르게 완료되므로 신속한 집행이 생명입니다.",
+                        "\n" + "=" * 40,
+                        f"※ 본 알림은 1분 단위 Binance-Bybit 실시간 시세 괴리 스캔 엔진에 의해 발송됩니다."
+                    ]
+                    send_telegram_message("\n".join(lines), strategy=strategy_spot_arb)
 
     # ------------------ Strategy 6: Kimchi Premium Arbitrage ------------------
     strategy_kimchi_arb = "kimchi_arbitrage"
@@ -921,6 +1003,8 @@ def check_signals_for_symbol(symbol: str, config: dict):
     TP_kimchi = float(kimchi_config.get("TP", 1.0))
     
     upbit_price = fetch_upbit_price(symbol)
+    bithumb_price = fetch_bithumb_price(symbol)
+    coinone_price = fetch_coinone_price(symbol)
     
     if upbit_price > 0:
         premium = ((upbit_price / current_price) - 1.0) * 100.0
@@ -944,34 +1028,89 @@ def check_signals_for_symbol(symbol: str, config: dict):
         if trigger_kimchi:
             last_alert = last_alert_times.get((symbol, strategy_kimchi_arb), 0)
             if now - last_alert >= ALERT_COOLDOWN_SECONDS:
-                last_alert_times[(symbol, strategy_kimchi_arb)] = now
-                trigger_trade(symbol, current_price, 0, min_premium, premium, H_kimchi, SL_kimchi, TP_kimchi, strategy_kimchi_arb)
-                
-                # Fetch KRW price for display
-                usd_rate = get_usd_krw_rate()
-                upbit_krw = upbit_price * usd_rate
-                
-                lines = [
-                    f"🇰🇷 <b>[No Slip Kimchi] 김치 프리미엄 괴리 포착 ({display_sym})</b>",
-                    "=" * 40,
-                    f"🔥 <b>{display_sym} 국내-해외 거래소 가격 괴리 포착</b>",
-                    f"  • Binance 가격 (해외): ${current_price:,.2f}",
-                    f"  • Upbit 가격 (국내): ₩{upbit_krw:,.0f} (${upbit_price:,.2f})",
-                    f"  • <b>현재 김치 프리미엄</b>: <b>{premium:+.2f}%</b> (범위: {min_premium}% ~ {max_premium}%)",
-                    f"  • <b>진입 사유</b>: {reason}",
-                    f"  • <b>매매 전략</b>: 한국 프리미엄 차익거래 (Kimchi Premium Arbitrage)",
-                    f"  • <b>핵심 근거</b>: 한국 거래소의 외환 규제 및 수급 왜곡으로 유발되는 김프/역프 가격 편차를 이용해, 상대적으로 저평가된 시장에서 사고 고평가된 시장에서 매도하여 변동성을 차익화합니다.",
-                    "\n<b>🎯 차익거래 실행 방향 가이드</b>",
-                    f"  • <b>시장 상태</b>: {direction}",
-                    f"  • <b>추천 대응</b>: {action_desc}",
-                    f"  • <b>목표 익절값 ({TP_kimchi}%)</b>: 프리미엄 수렴시 청산",
-                    f"  • <b>최대 홀딩시간</b>: {H_kimchi}분",
-                    "\n💡 <b>알림 해석 가이드</b>",
-                    "• 역프(국내가 더 저렴) 일 때 구매하여 해외로 송금해 매도하는 테이커 전략이나, 김프가 급등할 때 헷징 숏 포지션을 해외에 잡고 국내 현물을 고가에 정리하는 전략 등으로 무위험 고수익 확보가 가능합니다.",
-                    "\n" + "=" * 40,
-                    f"※ 본 알림은 1분 단위 Upbit-Binance 프리미엄 실시간 스캔 엔진에 의해 발송됩니다."
-                ]
-                send_telegram_message("\n".join(lines))
+                if check_mlp_and_trigger_trade(symbol, current_price, 0, min_premium, premium, H_kimchi, SL_kimchi, TP_kimchi, strategy_kimchi_arb, df, now, last_alert_times):
+                    # Fetch KRW price for display
+                    usd_rate = get_usd_krw_rate()
+                    upbit_krw = upbit_price * usd_rate
+                    
+                    lines = [
+                        f"🇰🇷 <b>[No Slip Kimchi] 김치 프리미엄 괴리 포착 ({display_sym})</b>",
+                        "=" * 40,
+                        f"🔥 <b>{display_sym} 국내-해외 거래소 가격 괴리 포착</b>",
+                        f"  • Binance 가격 (해외): ${current_price:,.2f}",
+                        f"  • Upbit 가격 (국내): ₩{upbit_krw:,.0f} (${upbit_price:,.2f})",
+                        f"  • <b>현재 김치 프리미엄</b>: <b>{premium:+.2f}%</b> (범위: {min_premium}% ~ {max_premium}%)",
+                        f"  • <b>진입 사유</b>: {reason}",
+                        f"  • <b>매매 전략</b>: 한국 프리미엄 차익거래 (Kimchi Premium Arbitrage)",
+                        f"  • <b>핵심 근거</b>: 한국 거래소의 외환 규제 및 수급 왜곡으로 유발되는 김프/역프 가격 편차를 이용해, 상대적으로 저평가된 시장에서 사고 고평가된 시장에서 매도하여 변동성을 차익화합니다.",
+                        "\n<b>🎯 차익거래 실행 방향 가이드</b>",
+                        f"  • <b>시장 상태</b>: {direction}",
+                        f"  • <b>추천 대응</b>: {action_desc}",
+                        f"  • <b>목표 익절값 ({TP_kimchi}%)</b>: 프리미엄 수렴시 청산",
+                        f"  • <b>최대 홀딩시간</b>: {H_kimchi}분",
+                        "\n💡 <b>알림 해석 가이드</b>",
+                        "• 역프(국내가 더 저렴) 일 때 구매하여 해외로 송금해 매도하는 테이커 전략이나, 김프가 급등할 때 헷징 숏 포지션을 해외에 잡고 국내 현물을 고가에 정리하는 전략 등으로 무위험 고수익 확보가 가능합니다.",
+                        "\n" + "=" * 40,
+                        f"※ 본 알림은 1분 단위 Upbit-Binance 프리미엄 실시간 스캔 엔진에 의해 발송됩니다."
+                    ]
+                    send_telegram_message("\n".join(lines), strategy=strategy_kimchi_arb)
+
+    # ------------------ Strategy 7: Multi-Exchange Arbitrage (Binance vs Bybit vs Upbit vs Bithumb vs Coinone) ------------------
+    strategy_three_way_arb = "three_way_arbitrage"
+    three_way_config = symbol_config.get("three_way_arbitrage", {"spread_trigger": 0.15, "H": 10, "SL": 0.5, "TP": 0.3})
+    spread_trigger_3 = float(three_way_config.get("spread_trigger", 0.15))
+    H_three_way = int(three_way_config.get("H", 10))
+    SL_three_way = float(three_way_config.get("SL", 0.5))
+    TP_three_way = float(three_way_config.get("TP", 0.3))
+    
+    prices = []
+    if current_price > 0:
+        prices.append(("Binance", current_price))
+    if bybit_price > 0:
+        prices.append(("Bybit", bybit_price))
+    if upbit_price > 0:
+        prices.append(("Upbit", upbit_price))
+    if bithumb_price > 0:
+        prices.append(("Bithumb", bithumb_price))
+    if coinone_price > 0:
+        prices.append(("Coinone", coinone_price))
+        
+    if len(prices) >= 2:
+        cheapest_ex, cheapest_p = min(prices, key=lambda x: x[1])
+        expensive_ex, expensive_p = max(prices, key=lambda x: x[1])
+        spread_3 = ((expensive_p / cheapest_p) - 1.0) * 100.0
+        
+        if spread_3 >= spread_trigger_3:
+            last_alert = last_alert_times.get((symbol, strategy_three_way_arb), 0)
+            if now - last_alert >= ALERT_COOLDOWN_SECONDS:
+                if check_mlp_and_trigger_trade(symbol, cheapest_p, 0, spread_trigger_3, spread_3, H_three_way, SL_three_way, TP_three_way, strategy_three_way_arb, df, now, last_alert_times):
+                    direction_desc = f"{cheapest_ex} 매수 (${cheapest_p:,.2f}) ➡️ {expensive_ex} 매도 (${expensive_p:,.2f}) 동시에 체결"
+                    
+                    lines = [
+                        f"⚖️ <b>[No Slip Multi-Exchange Arbitrage] 다자간 무위험 차익거래 포착 ({display_sym})</b>",
+                        "=" * 40,
+                        f"🔥 <b>{display_sym} 5개 거래소간 최적 차익 기회 발생</b>",
+                        f"  • Binance 가격: ${current_price:,.2f}" if current_price > 0 else "  • Binance 가격: N/A",
+                        f"  • Bybit 가격: ${bybit_price:,.2f}" if bybit_price > 0 else "  • Bybit 가격: N/A",
+                        f"  • Upbit 가격 (USD): ${upbit_price:,.2f}" if upbit_price > 0 else "  • Upbit 가격 (USD): N/A",
+                        f"  • Bithumb 가격 (USD): ${bithumb_price:,.2f}" if bithumb_price > 0 else "  • Bithumb 가격 (USD): N/A",
+                        f"  • Coinone 가격 (USD): ${coinone_price:,.2f}" if coinone_price > 0 else "  • Coinone 가격 (USD): N/A",
+                        f"  • <b>최대 스프레드</b>: <b>{spread_3:+.3f}%</b> (기준치: {spread_trigger_3}%)",
+                        f"  • <b>최저가 거래소</b>: {cheapest_ex} (${cheapest_p:,.2f})",
+                        f"  • <b>최고가 거래소</b>: {expensive_ex} (${expensive_p:,.2f})",
+                        f"  • <b>진입 사유</b>: {len(prices)}개 거래소 간 가격 불균형으로 인해 무위험 스프레드 {spread_3:.3f}% 확보 가능",
+                        f"  • <b>매매 전략</b>: 다자간 동시 현물 차익거래 (Multi-Exchange Spot Arbitrage)",
+                        f"  • <b>핵심 근거</b>: 서로 다른 5개 거래소의 가격을 실시간으로 비교하여, 가장 저렴한 거래소에서 즉시 매수하고 동시에 가장 비싼 거래소에서 매도하여 가격 왜곡 수렴 시 확정적이고 리스크가 없는 차익을 실현합니다.",
+                        "\n<b>🎯 차익거래 실행 방향 가이드</b>",
+                        f"  • <b>실행 방향</b>: {direction_desc}",
+                        f"  • <b>목표 익절값 ({TP_three_way}%)</b>: 스프레드 {TP_three_way}% 수렴 시 전량 청산",
+                        f"  • <b>최대 홀딩시간</b>: {H_three_way}분",
+                        "\n💡 <b>알림 해석 가이드</b>",
+                        f"• 알림 수신 즉시 {cheapest_ex}에서 매수 주문과 {expensive_ex}에서 매도 주문을 동시에 집행합니다. 가격 수렴이 신속히 이루어지므로 각 거래소 간의 자동 전송 또는 실시간 원장 헷징이 중요합니다.",
+                        "\n" + "=" * 40,
+                        f"※ 본 알림은 1분 단위 Binance-Bybit-Upbit-Bithumb-Coinone 다자간 실시간 시세 스캔 엔진에 의해 발송됩니다."
+                    ]
+                    send_telegram_message("\n".join(lines), strategy=strategy_three_way_arb)
 
 def main():
     global last_hourly_report_time
@@ -982,6 +1121,15 @@ def main():
     config = load_whale_config()
     print(f"Loaded config: {json.dumps(config, indent=2)}")
     
+    # Train MLP Drop Predictors on startup
+    from mlp_drop_predictor import train_mlp_drop_predictor
+    last_mlp_train_time = time.time()
+    for sym in symbols:
+        try:
+            train_mlp_drop_predictor(sym)
+        except Exception as e:
+            print(f"⚠️ Error training initial MLP for {sym}: {e}")
+            
     # Trigger an initial report on startup
     try:
         send_hourly_quant_report()
@@ -991,6 +1139,16 @@ def main():
         
     while True:
         now = time.time()
+        
+        # Periodically retrain MLP Drop Predictors every 60 minutes
+        if now - last_mlp_train_time >= 3600:
+            print("🧠 [MLP Daemon] Periodic retraining of MLP Drop Predictors...")
+            for sym in symbols:
+                try:
+                    train_mlp_drop_predictor(sym)
+                except Exception as e:
+                    print(f"⚠️ Error retraining MLP for {sym}: {e}")
+            last_mlp_train_time = now
         
         # 1. Check and resolve any active trades (RL Update)
         try:

@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import json
-
 import os
 import sys
+import machine_auth
 import time
+
 import requests
 import re
 import pandas as pd
@@ -280,11 +281,180 @@ def parse_champion_request(text: str) -> bool:
     text = text.strip()
     return text in ["/champion", "/챔피언"]
 
+def parse_orbit_request(text: str) -> bool:
+    text = text.strip()
+    return text in ["/orbit", "/오빗", "/궤적", "/orbit학습", "/궤적학습"]
+
+def parse_ohseon_request(text: str) -> bool:
+    text = text.strip()
+    return text in ["/ohseon", "/오선", "/시황요약", "/오선요약"]
+
+def parse_gemini_request(text: str) -> str:
+    text = text.strip()
+    for prefix in ["/gemini ", "/제미나이 ", "/gemini", "/제미나이"]:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    return None
+
+def sanitize_telegram_html(text: str) -> str:
+    """Strips invalid HTML tags and escapes special characters for Telegram compatibility."""
+    if not text:
+        return ""
+    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    placeholders = []
+    a_pattern = r'<a\s+href="[^"]*">'
+    a_tags = re.findall(a_pattern, text)
+    temp_text = text
+    for idx, tag in enumerate(a_tags):
+        placeholder = f"__A_TAG_{idx}__"
+        placeholders.append((placeholder, tag))
+        temp_text = temp_text.replace(tag, placeholder)
+    standard_tags = ['</a>', '<b>', '</b>', '<i>', '</i>', '<code>', '</code>', '<pre>', '</pre>']
+    for idx, tag in enumerate(standard_tags):
+        placeholder = f"__TAG_{idx}__"
+        placeholders.append((placeholder, tag))
+        temp_text = temp_text.replace(tag, placeholder)
+    temp_text = temp_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    for placeholder, tag in placeholders:
+        temp_text = temp_text.replace(placeholder, tag)
+    return temp_text
+
+GEMINI_HISTORY_FILE = CACHE_DIR / "gemini_chat_history.json"
+
+def load_gemini_chat_history() -> dict:
+    if not GEMINI_HISTORY_FILE.exists():
+        return {}
+    try:
+        with open(GEMINI_HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"⚠️ Failed to load gemini chat history: {e}")
+        return {}
+
+def save_gemini_chat_history(history: dict):
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(GEMINI_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ Failed to save gemini chat history: {e}")
+
+SYSTEM_CONTEXT = """
+너는 이 가상자산/주식 퀀트 자동 매매 시스템인 'No Slip Saas' 프로젝트의 AI 전문 보조원(Gemini)이자 토론 상대야.
+사용자가 시스템의 설계, 전략, 알고리즘, 파라미터, 성능, 데이터베이스 구조 등에 대해 물어보거나 토론하고자 하면,
+이 프로젝트의 주요 아키텍처와 컨텍스트를 완벽하게 숙지한 상태에서 상세하고 친근하게 답변해야 해.
+답변은 항상 명확하고, 가독성을 위해 마크다운 및 HTML 태그를 적절히 섞어서 고급스럽게 작성해 줘.
+
+[프로젝트 핵심 아키텍처 및 기능 요약]
+1. 실시간 급등주 감시 및 매매 엔진 (whale_pump_monitor.py)
+   - Binance, Bybit, Upbit의 1분 단위 kline 데이터를 분석하여 7가지 전략 기반 실시간 매수 타점 포착.
+   - 전략 1: 고래 수급 (Whale Pump) - 짧은 시간 내 거래량이 V배 폭증하고 가격이 X% 이상 상승 시 세력 매집으로 판단해 추격매수.
+   - 전략 2: RSI 과매도 반등 (RSI Reversion) - RSI가 트리거선 이하로 하락 후 고개를 들 때(반등 시작) 분할 저가매수.
+   - 전략 3: MACD 골든크로스 (MACD Crossover) - MACD선이 시그널선을 상승 돌파하며 수급이 뒷받침될 때 추세추종 매수.
+   - 전략 4: 볼린저 밴드 수축 및 상단 돌파 (BB Squeeze Breakout) - 밴드폭이 30분 최저치 수준으로 수축 후 상단 돌파 시 랠리 타점.
+   - 전략 5: 거래소간 차익거래 (Spot Arbitrage) - Binance와 Bybit 간 스프레드가 임계치를 넘을 때 양방향 차익 실현.
+   - 전략 6: 김치프리미엄 차익거래 (Kimchi Arbitrage) - 해외(Binance)와 국내(Upbit) 가격 차이(김프/역프) 괴리를 이용한 무위험 차익.
+   - 전략 7: 다자간 무위험 차익거래 (Multi-Way Arbitrage) - Binance, Bybit, Upbit, Bithumb, Coinone 5개 거래소의 실시간 시세를 교차 분석하여 가장 저렴한 곳에서 매수하고 비싼 곳에서 매도하는 최적 경로 차익거래. (최근 Bithumb과 Coinone이 한국 거래소 후보군으로 추가되어 5개 거래소 비교로 고도화됨)
+
+2. 강화학습(RL) 피드백 루프 및 동적 가중치 업데이트
+   - 가상 매매가 종료되면 손절/익절/타임아웃 여부에 따라 보상(Reward)을 계산하여 SQLite DB(whale_rewards.sqlite3)에 기록.
+   - 손실 발생 시 패널티를 부여하여 임계치(X, V, RSI trigger 등)를 높이고(보수적 진입), 수익 발생 시 강화하여 최적의 파라미터를 실시간 자율 조정.
+
+3. 6인 에이전트 합의 위원회 (Multi-Agent Consensus System)
+   - Macro(거시경제), Trend(추세), Value(가치), Whale(수급), Mean Reversion(RSI), ClucMay(볼린저 밴드/MA 결합)의 6인 AI 위원들이 기술적 분석과 뉴스 컨텍스트를 융합하여 투표.
+   - 합의지수가 +15% 초과일 때만 최종 진입 승인하여 휩소(가짜 신호)를 최소화.
+
+4. GICS 섹터 오빗 학습 엔진 (sector_orbit_learner.py)
+   - S&P 500의 11개 GICS 섹터 ETF 데이터를 일별로 모니터링하여 Momentum/Conviction 4차원 좌표 공간으로 투사.
+   - SVD(특이값 분해)와 Residual MLP 신경망을 결합해 섹터들의 상태 천이(Orbit Trajectory) 궤적을 딥러닝하고, 다음 날의 최적 포트폴리오 비중을 다이내믹하게 조정.
+
+5. 머신러닝 하락 차단 필터 (MLP Drop Filter)
+   - MLPClassifier 신경망 모델(tanh, hidden 16x8)이 Binance 1m klines의 7가지 특징값(RSI, MACD hist, BB bandwidth 등)을 학습하여 향후 15분 이내 단기 하락 확률을 실시간 예측.
+   - 예측 확률이 50% 이상(임계치)이면 arbitrage를 포함한 모든 매수 전략 진입을 사전에 강제 차단(Halt)하여 손실 차단.
+
+6. 오선 유튜브 요약 자동화 및 데일리 파이프라인 (ohseon_summary.py, run_daily.sh)
+   - 매일 장 마감 후 '오선의 미국 증시 라이브' 유튜브 채널 RSS를 파싱하여 키워드를 추출, 당일 구글 뉴스 속보와 융합한 시황 정보를 Gemini API로 생성하여 텔레그램으로 자동 브로드캐스트.
+
+사용자의 모든 질문에 이 시스템의 핵심 원리와 동작 방식을 바탕으로 정중하고 디테일하게 응대해 줘. 필요한 경우 한국어로 자연스럽고 신뢰감 있게 설명해야 해.
+"""
+
+def execute_gemini_chat(chat_id: str, user_query: str) -> str:
+    """Handle chat and debate with Gemini about the project context with persistent history."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key or not HAS_GEMINI:
+        return "⚠️ Gemini API가 구성되지 않았거나 google-generativeai 패키지가 없습니다. 관리자에게 문의해 주세요."
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name="gemini-flash-latest",
+            system_instruction=SYSTEM_CONTEXT
+        )
+        history_data = load_gemini_chat_history()
+        chat_history = history_data.get(str(chat_id), [])
+        formatted_history = []
+        for msg in chat_history[-30:]:
+            role = msg.get("role")
+            text = msg.get("text")
+            if role in ["user", "model"] and text:
+                formatted_history.append({
+                    "role": role,
+                    "parts": [{"text": text}]
+                })
+        chat = model.start_chat(history=formatted_history)
+        response = chat.send_message(user_query)
+        response_text = response.text.strip()
+        new_history = list(chat_history)
+        new_history.append({"role": "user", "text": user_query})
+        new_history.append({"role": "model", "text": response_text})
+        history_data[str(chat_id)] = new_history[-50:]
+        save_gemini_chat_history(history_data)
+        return sanitize_telegram_html(response_text)
+    except Exception as e:
+        print(f"⚠️ execute_gemini_chat: failed to generate response: {e}")
+        return f"⚠️ 제미나이 답변 생성 중 오류가 발생했습니다: {e}"
+
 
 def parse_sector_request(text: str) -> bool:
     text = text.strip()
     return text in ["/섹터", "/sector", "/추천섹터", "/섹터추천"]
 
+def parse_alert_setting_request(text: str) -> bool:
+    text = text.strip()
+    return text in ["/alert", "/알림", "/알림설정", "/알림현황"]
+
+def parse_alert_on_request(text: str) -> str:
+    text = text.strip()
+    for prefix in ["/alert_on ", "/alerton ", "/알림온 ", "/알림추가 "]:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    return None
+
+def parse_alert_off_request(text: str) -> str:
+    text = text.strip()
+    for prefix in ["/alert_off ", "/alertoff ", "/알림오프 ", "/알림삭제 ", "/알림제거 "]:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    return None
+
+VALID_STRATEGIES = [
+    "whale_pump",
+    "rsi_reversion",
+    "macd_crossover",
+    "bb_breakout",
+    "spot_arbitrage",
+    "kimchi_arbitrage",
+    "three_way_arbitrage"
+]
+
+STRATEGY_DISPLAY = {
+    "whale_pump": "고래수급 (whale_pump)",
+    "rsi_reversion": "RSI반등 (rsi_reversion)",
+    "macd_crossover": "MACD교차 (macd_crossover)",
+    "bb_breakout": "BB돌파 (bb_breakout)",
+    "spot_arbitrage": "거래소차익 (spot_arbitrage)",
+    "kimchi_arbitrage": "김프차익 (kimchi_arbitrage)",
+    "three_way_arbitrage": "3자차익 (three_way_arbitrage)"
+}
 
 # ----------------- Theme (테마) Feature -----------------
 # A "theme" is a named basket of tickers (e.g. 네오클라우드, 반도체) that the bot
@@ -553,6 +723,26 @@ def execute_features_summary() -> str:
         "• <b>사용법</b>: <code>/infomap</code> 또는 <code>/정보맵</code> 또는 <code>/시각화</code>",
         "  - <i>예시: /infomap, /시각화</i>",
         "",
+        "🔔 <b>11. 개인화 알림 설정</b>",
+        "• <b>설명</b>: 각 단톡방/채팅방 별로 받아볼 전략 알림의 종류(고래 수급, RSI, MACD 등)를 켜거나 끄고, 최소 임계치(%)를 개별 지정할 수 있습니다.",
+        "• <b>사용법</b>: <code>/알림설정</code> | <code>/알림온 [전략명] [임계치%]</code> | <code>/알림오프 [전략명]</code>",
+        "  - <i>예시: /알림설정, /알림온 김프 1.5, /알림오프 rsi</i>",
+        "",
+        "🌀 <b>12. GICS 섹터 오빗(Orbit) 분석 & 시각화 차트</b>",
+        "• <b>설명</b>: 11개 GICS 섹터의 정보 기하학 좌표 무게중심과 내부 분산(Spread)의 다차원 전이 상태를 학습(SVD+MLP)하여, 향후 이동 방향과 상태 변화 시각화 차트를 전송합니다.",
+        "• <b>사용법</b>: <code>/orbit</code> 또는 <code>/궤적</code> 또는 <code>/오빗</code>",
+        "  - <i>예시: /orbit, /궤적, /orbit학습</i>",
+        "",
+        "📺 <b>13. 오선 미국 증시 시황 요약 (Gemini)</b>",
+        "• <b>설명</b>: 인기 주식 유튜브 채널 '오선의 미국 증시 라이브'의 최신 방송 정보와 당일 실시간 뉴스를 신경망(Gemini)으로 융합 요약하여 마감 시황 리포트를 전송합니다.",
+        "• <b>사용법</b>: <code>/ohseon</code> 또는 <code>/오선</code>",
+        "  - <i>예시: /ohseon, /오선</i>",
+        "",
+        "🤖 <b>14. AI 제미나이 프로젝트 토론 보조원 (Gemini Chat)</b>",
+        "• <b>설명</b>: No Slip 퀀트 매매 시스템의 설계, 기술적 분석전략(고래수급, 차익거래 등) 및 파라미터 튜닝 등에 관해 인공지능 제미나이와 실시간 대화 및 토론을 진행합니다.",
+        "• <b>사용법</b>: <code>/gemini [질문]</code> 또는 <code>/제미나이 [질문]</code>",
+        "  - <i>예시: /gemini 고래 수급 전략 임계치 설정 팁을 줘</i>",
+        "",
         "=" * 40,
         "※ 본 봇은 지정된 허용 단톡방(Allowlist)에서만 동작하며, 모든 분석은 투자 참고용입니다."
     ]
@@ -573,13 +763,13 @@ def execute_portfolio_summary() -> str:
         try:
             with sqlite3.connect(portfolio_db_path) as conn:
                 row = conn.execute("""
-                    SELECT map_date, profile_name, champion_score, features_json
+                    SELECT map_date, profile_name, champion_score, features_json, payload_path
                     FROM portfolio_runs
                     ORDER BY map_date DESC
                     LIMIT 1
                 """).fetchone()
                 if row:
-                    map_date, profile_name, champion_score, features_json = row
+                    map_date, profile_name, champion_score, features_json, payload_path = row
                     features = json.loads(features_json)
                     
                     lines.append(f"📂 <b>S&P 500 자산 배분 포트폴리오 (최신 기준일: {map_date})</b>")
@@ -604,6 +794,59 @@ def execute_portfolio_summary() -> str:
                     mdd = features.get("weighted_max_drawdown_pct", 0.0)
                     lines.append(f"  • <b>포트폴리오 예상 메트릭스</b>:")
                     lines.append(f"    - 기대 상승률: {upside:.2f}% | 변동성: {vol:.2f}% | 최대 낙폭(MDD): -{mdd:.2f}%")
+                    
+                    # Information Geometry (피셔 정보) & Top Holdings
+                    fisher_trace = features.get("natural_gradient_fisher_trace")
+                    upper_bound = features.get("natural_gradient_upper_bound_score")
+                    fisher_curvature = None
+                    entropy = features.get("natural_gradient_live_entropy")
+                    holdings_list = []
+                    
+                    if payload_path and Path(payload_path).exists():
+                        try:
+                            with open(payload_path, "r", encoding="utf-8") as f:
+                                payload = json.load(f)
+                                if "naturalGradient" in payload:
+                                    ng = payload["naturalGradient"]
+                                    if fisher_trace is None:
+                                        fisher_trace = ng.get("fisherTrace")
+                                    if upper_bound is None:
+                                        upper_bound = ng.get("upperBoundScore")
+                                    if fisher_curvature is None:
+                                        fisher_curvature = ng.get("fisherCurvature")
+                                    if entropy is None:
+                                        entropy = ng.get("liveEntropy")
+                                if "holdings" in payload:
+                                    holdings_list = payload["holdings"]
+                        except Exception as e:
+                            print(f"⚠️ Failed to load portfolio payload file: {e}")
+                    
+                    lines.append("")
+                    lines.append("📊 <b>정보기하학적 피셔 지표 (Information Geometry)</b>")
+                    if fisher_trace is not None:
+                        lines.append(f"  • <b>Fisher Trace (피셔 트레이스)</b>: {fisher_trace:.4f}")
+                    if fisher_curvature is not None:
+                        lines.append(f"  • <b>Fisher Curvature (피셔 곡률)</b>: {fisher_curvature:.4f}")
+                    if upper_bound is not None:
+                        lines.append(f"  • <b>Natural Gradient Bound Score</b>: {upper_bound:.4f}")
+                    if entropy is not None:
+                        lines.append(f"  • <b>Live Entropy (포트폴리오 엔트로피)</b>: {entropy:.4f}")
+                        
+                    if holdings_list:
+                        # Sort by weightPct descending
+                        top_holdings = sorted(holdings_list, key=lambda x: x.get("weightPct", 0.0) or 0.0, reverse=True)[:5]
+                        lines.append("")
+                        lines.append("📈 <b>주요 포트폴리오 편입 종목 (Top 5)</b>")
+                        for h in top_holdings:
+                            sym = h.get("symbol", "N/A")
+                            w = h.get("weightPct", 0.0)
+                            tgt_w = h.get("naturalGradientTargetWeightPct")
+                            lift = h.get("naturalGradientLiftPct")
+                            
+                            tgt_w_str = f"{tgt_w:.1f}%" if tgt_w is not None else "N/A"
+                            lift_str = f"{lift:+.1f}%" if lift is not None else "N/A"
+                            
+                            lines.append(f"  • <b>{sym}</b>: 비중 {w:.1f}% (목표 {tgt_w_str} | Lift {lift_str})")
                 else:
                     lines.append("📂 <b>S&P 500 자산 배분 포트폴리오</b>: 기록된 포트폴리오 실행 이력이 없습니다.")
         except Exception as e:
@@ -1490,6 +1733,101 @@ def main():
                     threading.Thread(target=run_optimize_bg, daemon=True).start()
                     continue
 
+                # 0.91. Parse Alert settings
+                if parse_alert_setting_request(text):
+                    print(f"🔔 Received alert settings request from chat {chat_id}")
+                    try:
+                        from personal_ontology import get_alert_preferences
+                        prefs = get_alert_preferences(str(chat_id))
+                        prefs_map = {p["strategy"]: p for p in prefs}
+                        
+                        lines = [
+                            "🔔 <b>[No Slip AI Quant] 알림 수신 설정 현황</b>",
+                            "=" * 40
+                        ]
+                        for strat in VALID_STRATEGIES:
+                            disp = STRATEGY_DISPLAY.get(strat, strat)
+                            pref = prefs_map.get(strat)
+                            if not pref:
+                                lines.append(f"• {disp}: 🟢 <b>ON</b> (기본값)")
+                            else:
+                                is_enabled = pref["is_enabled"]
+                                threshold = pref["min_threshold"]
+                                status_str = "🟢 <b>ON</b>" if is_enabled else "🔴 <b>OFF</b>"
+                                if is_enabled and threshold is not None:
+                                    status_str += f" (기준치: {threshold}%)"
+                                lines.append(f"• {disp}: {status_str}")
+                                
+                        lines.append("=" * 40)
+                        lines.append("💡 <b>설정 변경 명령어 안내:</b>")
+                        lines.append("• <b>알림 켜기</b>: <code>/알림온 [전략명] [임계치%]</code>")
+                        lines.append("  - <i>예: /알림온 김프 1.5 (김프 차익거래 1.5% 이상일 때만 알림)</i>")
+                        lines.append("  - <i>예: /알림온 rsi (임계치 없이 모든 RSI 반등 알림 받기)</i>")
+                        lines.append("• <b>알림 끄기</b>: <code>/알림오프 [전략명]</code>")
+                        lines.append("  - <i>예: /알림오프 whale_pump (고래수급 알림 끄기)</i>")
+                        
+                        reply_to_telegram(chat_id, "\n".join(lines), message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error executing alert settings request: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 알림 설정 조회 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.92. Parse Alert ON
+                alert_on_arg = parse_alert_on_request(text)
+                if alert_on_arg:
+                    print(f"🔔 Received alert on request: {alert_on_arg} from chat {chat_id}")
+                    try:
+                        from personal_ontology import normalize_strategy, set_alert_preference
+                        parts = alert_on_arg.split()
+                        strategy_raw = parts[0]
+                        threshold = None
+                        if len(parts) > 1:
+                            try:
+                                threshold_str = parts[1].replace("%", "").strip()
+                                threshold = float(threshold_str)
+                            except ValueError:
+                                reply_to_telegram(chat_id, f"⚠️ 올바르지 않은 임계치 형식입니다: <code>{parts[1]}</code>. 숫자 또는 백분율 형식으로 입력해주세요.", message_id)
+                                continue
+                        
+                        norm_strat = normalize_strategy(strategy_raw)
+                        if norm_strat not in VALID_STRATEGIES:
+                            avail_str = ", ".join(VALID_STRATEGIES)
+                            reply_to_telegram(chat_id, f"⚠️ 유효하지 않은 전략 이름입니다: <code>{strategy_raw}</code>\n\n<b>사용 가능 전략 목록:</b>\n{avail_str}", message_id)
+                            continue
+                            
+                        set_alert_preference(str(chat_id), norm_strat, is_enabled=True, min_threshold=threshold)
+                        
+                        disp = STRATEGY_DISPLAY.get(norm_strat, norm_strat)
+                        th_str = f" (최소 기준치: {threshold}%)" if threshold is not None else ""
+                        reply_to_telegram(chat_id, f"✅ <b>{disp}</b> 알림이 활성화되었습니다.{th_str}", message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error setting alert ON preference: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 알림 설정 변경 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # 0.93. Parse Alert OFF
+                alert_off_arg = parse_alert_off_request(text)
+                if alert_off_arg:
+                    print(f"🔔 Received alert off request: {alert_off_arg} from chat {chat_id}")
+                    try:
+                        from personal_ontology import normalize_strategy, set_alert_preference
+                        strategy_raw = alert_off_arg.strip()
+                        
+                        norm_strat = normalize_strategy(strategy_raw)
+                        if norm_strat not in VALID_STRATEGIES:
+                            avail_str = ", ".join(VALID_STRATEGIES)
+                            reply_to_telegram(chat_id, f"⚠️ 유효하지 않은 전략 이름입니다: <code>{strategy_raw}</code>\n\n<b>사용 가능 전략 목록:</b>\n{avail_str}", message_id)
+                            continue
+                            
+                        set_alert_preference(str(chat_id), norm_strat, is_enabled=False, min_threshold=None)
+                        
+                        disp = STRATEGY_DISPLAY.get(norm_strat, norm_strat)
+                        reply_to_telegram(chat_id, f"✅ <b>{disp}</b> 알림이 비활성화되었습니다.", message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error setting alert OFF preference: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 알림 설정 변경 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
                 # 0.95. Parse Website Tunnel Request
                 if parse_website_request(text):
                     print(f"🌐 Received website tunnel request from chat {chat_id}")
@@ -1589,6 +1927,29 @@ def main():
                     except Exception as e:
                         print(f"⚠️ Error executing infomap request: {e}")
                         reply_to_telegram(chat_id, f"⚠️ 정보맵 시각화 생성 중 오류가 발생했습니다: {e}", message_id)
+
+                # Parse Gemini Chat/Debate Request
+                gemini_query = parse_gemini_request(text)
+                if gemini_query is not None:
+                    if not gemini_query:
+                        help_text = (
+                            "🤖 <b>No Slip AI 제미나이 토론 보조원</b>\n"
+                            "=" * 35 + "\n"
+                            "본 시스템의 전략, 알고리즘, 파라미터 튜닝 등에 대해 자유롭게 질문하거나 토론할 수 있습니다.\n\n"
+                            "▶️ 사용법: <code>/gemini [질문 또는 의견]</code>\n"
+                            "  (예: <code>/gemini 고래 수급 전략의 파라미터를 어떻게 튜닝하는 게 좋지?</code>)\n"
+                            "=" * 35
+                        )
+                        reply_to_telegram(chat_id, help_text, message_id)
+                    else:
+                        print(f"🤖 Received Gemini chat request from chat {chat_id}: '{gemini_query}'")
+                        reply_to_telegram(chat_id, "⏳ <b>제미나이 AI가 답변을 작성 중입니다...</b>", message_id)
+                        try:
+                            gemini_reply = execute_gemini_chat(str(chat_id), gemini_query)
+                            reply_to_telegram(chat_id, gemini_reply, message_id)
+                        except Exception as e:
+                            print(f"⚠️ Error executing gemini chat: {e}")
+                            reply_to_telegram(chat_id, f"⚠️ 제미나이 처리 중 오류가 발생했습니다: {e}", message_id)
                     continue
 
                 # 0.990. Parse Sector Recommendation Request
@@ -1602,6 +1963,19 @@ def main():
                         print(f"⚠️ Error executing sector recommendation: {e}")
                         report = f"⚠️ 섹터 추천 산출 중 오류가 발생했습니다: {e}"
                     reply_to_telegram(chat_id, report, message_id)
+                    continue
+
+                # 0.990.1. Parse Orbit Request
+                if parse_orbit_request(text):
+                    print(f"🌀 Received orbit trajectory request from chat {chat_id}")
+                    reply_to_telegram(chat_id, "⏳ <b>GICS 섹터 오빗(Orbit) 분석 및 시각화 차트를 생성 중입니다...</b>", message_id)
+                    try:
+                        from services.trader.sector_orbit_learner import run_pipeline, ORBIT_PLOT_PATH
+                        ranked, report = run_pipeline()
+                        reply_photo_to_telegram(chat_id, str(ORBIT_PLOT_PATH), report, message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error executing orbit request: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 섹터 오빗 분석 중 오류가 발생했습니다: {e}", message_id)
                     continue
 
                 # 0.991. Parse Theme List Request

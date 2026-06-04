@@ -1216,7 +1216,11 @@ def enrich_with_symmetry_dark_horses(
 
     dark_horse_picks: List[Dict[str, Any]] = []
     seen_symbols = set()
+    MAX_LINGER_SECONDS = 15.0 * 86400.0
     for item in dark_horse_candidates:
+        linger = safe_float(item.get("drawdownLingerSeconds"))
+        if linger is not None and linger > MAX_LINGER_SECONDS:
+            continue
         symmetry = item.get("symmetry") or {}
         if (
             (safe_float(item.get("darkHorseScore")) or 0.0) < 58.0
@@ -1231,6 +1235,9 @@ def enrich_with_symmetry_dark_horses(
     if len(dark_horse_picks) < 10:
         for item in dark_horse_candidates:
             if item.get("symbol") in seen_symbols:
+                continue
+            linger = safe_float(item.get("drawdownLingerSeconds"))
+            if linger is not None and linger > MAX_LINGER_SECONDS:
                 continue
             dark_horse_picks.append(item)
             seen_symbols.add(item.get("symbol"))
@@ -1481,23 +1488,73 @@ def optimize_information_map(
     ranked_items, dark_horse_picks = enrich_with_symmetry_dark_horses(ranked_items)
     ranked_items = enrich_with_small_cap_heavy_tail(ranked_items)
 
-    recommended = [
-        item
-        for item in ranked_items
-        if item.get("finalAction") != "SELL" and item.get("optimizationScore", -999.0) > -0.5
-    ]
+    recommended = []
+    MAX_LINGER_SECONDS = 15.0 * 86400.0
+    for item in ranked_items:
+        action = item.get("finalAction")
+        score = item.get("optimizationScore", -999.0)
+        linger = safe_float(item.get("drawdownLingerSeconds"))
+        
+        if action != "SELL" and score > -0.5:
+            if linger is not None and linger > MAX_LINGER_SECONDS:
+                continue
+            recommended.append(item)
+            
     top_picks = recommended[:10]
     if len(top_picks) < 10:
         seen = {item["symbol"] for item in top_picks}
         for item in ranked_items:
             if item["symbol"] in seen:
                 continue
+            linger = safe_float(item.get("drawdownLingerSeconds"))
+            if linger is not None and linger > MAX_LINGER_SECONDS:
+                continue
             top_picks.append(item)
             seen.add(item["symbol"])
             if len(top_picks) >= 10:
                 break
 
-    return ranked_items, top_picks, dark_horse_picks
+    # Compile drawdown exclusions with reasons
+    drawdown_exclusions = []
+    seen_exclusions = set()
+    for item in ranked_items[:25]:
+        linger = safe_float(item.get("drawdownLingerSeconds"))
+        if linger is not None and linger > MAX_LINGER_SECONDS:
+            symbol = item.get("symbol")
+            if symbol not in seen_exclusions:
+                linger_days = linger / 86400.0
+                drawdown_exclusions.append({
+                    "symbol": symbol,
+                    "name": item.get("name", "N/A"),
+                    "lingerDays": float(linger_days),
+                    "reason": f"예상 하락 회복 소요 기간 {linger_days:.1f}일 (기준 15.0일 초과)"
+                })
+                seen_exclusions.add(symbol)
+                
+    dark_horse_candidates = [
+        candidate
+        for candidate in sorted(
+            ranked_items,
+            key=lambda entry: safe_float(entry.get("darkHorseScore")) or -999.0,
+            reverse=True,
+        )
+        if str(candidate.get("finalAction") or "HOLD") != "SELL"
+    ]
+    for item in dark_horse_candidates[:15]:
+        linger = safe_float(item.get("drawdownLingerSeconds"))
+        if linger is not None and linger > MAX_LINGER_SECONDS:
+            symbol = item.get("symbol")
+            if symbol not in seen_exclusions:
+                linger_days = linger / 86400.0
+                drawdown_exclusions.append({
+                    "symbol": symbol,
+                    "name": item.get("name", "N/A"),
+                    "lingerDays": float(linger_days),
+                    "reason": f"예상 하락 회복 소요 기간 {linger_days:.1f}일 (기준 15.0일 초과)"
+                })
+                seen_exclusions.add(symbol)
+
+    return ranked_items, top_picks, dark_horse_picks, drawdown_exclusions
 
 
 def build_sp500_information_map(
@@ -1537,12 +1594,13 @@ def build_sp500_information_map(
                 fmkorea_enriched_points,
                 market_mode="sp500",
             )
-            ranked_items, top_picks, dark_horse_picks = optimize_information_map(
+            ranked_items, top_picks, dark_horse_picks, drawdown_exclusions = optimize_information_map(
                 human_bias_enriched_points
             )
             cached_payload["points"] = ranked_items
             cached_payload["topPicks"] = top_picks
             cached_payload["darkHorsePicks"] = dark_horse_picks
+            cached_payload["drawdownExclusions"] = drawdown_exclusions
             cached_payload["webNeuralModel"] = web_neural_model
             cached_payload["featureBenchmark"] = feature_benchmark
             cached_payload["fmkoreaStock"] = fmkorea_stock
@@ -1594,7 +1652,7 @@ def build_sp500_information_map(
         fmkorea_enriched_results,
         market_mode="sp500",
     )
-    ranked_items, top_picks, dark_horse_picks = optimize_information_map(human_bias_enriched_results)
+    ranked_items, top_picks, dark_horse_picks, drawdown_exclusions = optimize_information_map(human_bias_enriched_results)
     map_date = today_market_date()
     payload = {
         "ok": True,
@@ -1651,6 +1709,7 @@ def build_sp500_information_map(
         "points": ranked_items,
         "topPicks": top_picks,
         "darkHorsePicks": dark_horse_picks,
+        "drawdownExclusions": drawdown_exclusions,
         "failures": failures[:50],
     }
     persist_information_map(payload)

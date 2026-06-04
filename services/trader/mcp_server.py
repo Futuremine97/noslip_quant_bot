@@ -19,6 +19,9 @@ TRADER_DIR = ROOT_DIR / "services" / "trader"
 if str(TRADER_DIR) not in sys.path:
     sys.path.insert(0, str(TRADER_DIR))
 
+import machine_auth
+
+
 def get_analysis_tool_with_graph(symbol: str) -> tuple[str, str | None]:
     from telegram_interactive_bot import execute_analysis_with_graph, normalize_symbol
     normalized = normalize_symbol(symbol)

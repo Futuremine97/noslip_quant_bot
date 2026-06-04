@@ -898,6 +898,10 @@ def select_candidates(
     selected: List[Dict[str, Any]] = []
 
     for item in ranked:
+        linger = safe_float(item.get("drawdownLingerSeconds"))
+        if linger is not None and linger > 15.0 * 86400.0:
+            continue
+            
         sector = str(item.get("sector") or "Other")
         if sector_counts.get(sector, 0) >= MAX_PER_SECTOR:
             continue

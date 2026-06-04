@@ -27,7 +27,105 @@ def init_db():
                 PRIMARY KEY (user_id, concept_name)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_alert_preferences (
+                chat_id TEXT,
+                strategy TEXT,
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                min_threshold REAL,
+                PRIMARY KEY (chat_id, strategy)
+            )
+        """)
         conn.commit()
+
+STRATEGY_MAP = {
+    "whale_pump": "whale_pump",
+    "whale": "whale_pump",
+    "고래": "whale_pump",
+    "고래수급": "whale_pump",
+    "rsi_reversion": "rsi_reversion",
+    "rsi": "rsi_reversion",
+    "rsi반등": "rsi_reversion",
+    "macd_crossover": "macd_crossover",
+    "macd": "macd_crossover",
+    "bb_breakout": "bb_breakout",
+    "bb": "bb_breakout",
+    "bb돌파": "bb_breakout",
+    "spot_arbitrage": "spot_arbitrage",
+    "spot_arb": "spot_arbitrage",
+    "거래소차익": "spot_arbitrage",
+    "kimchi_arbitrage": "kimchi_arbitrage",
+    "kimchi_arb": "kimchi_arbitrage",
+    "김프": "kimchi_arbitrage",
+    "김프차익": "kimchi_arbitrage",
+    "three_way_arbitrage": "three_way_arbitrage",
+    "three_way_arb": "three_way_arbitrage",
+    "3자차익": "three_way_arbitrage",
+    "차익거래": "three_way_arbitrage"
+}
+
+def normalize_strategy(strategy: str) -> str:
+    s = strategy.strip().lower().replace("_", "").replace("-", "")
+    s = "".join(s.split())
+    for k, v in STRATEGY_MAP.items():
+        k_norm = k.lower().replace("_", "").replace("-", "")
+        if s == k_norm:
+            return v
+    return strategy
+
+def get_alert_preferences(chat_id: str) -> list[dict]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT strategy, is_enabled, min_threshold
+            FROM user_alert_preferences
+            WHERE chat_id = ?
+            ORDER BY strategy ASC
+        """, (str(chat_id),)).fetchall()
+    return [dict(r) for r in rows]
+
+def set_alert_preference(chat_id: str, strategy: str, is_enabled: bool, min_threshold: float = None) -> dict:
+    init_db()
+    norm_strat = normalize_strategy(strategy)
+    is_enabled_int = 1 if is_enabled else 0
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            INSERT INTO user_alert_preferences (chat_id, strategy, is_enabled, min_threshold)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id, strategy) DO UPDATE SET
+                is_enabled = excluded.is_enabled,
+                min_threshold = excluded.min_threshold
+        """, (str(chat_id), norm_strat, is_enabled_int, min_threshold))
+        conn.commit()
+    return {
+        "chat_id": chat_id,
+        "strategy": norm_strat,
+        "is_enabled": is_enabled,
+        "min_threshold": min_threshold
+    }
+
+def is_alert_allowed(chat_id: str, strategy: str, current_value: float = None) -> bool:
+    init_db()
+    norm_strat = normalize_strategy(strategy)
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("""
+            SELECT is_enabled, min_threshold
+            FROM user_alert_preferences
+            WHERE chat_id = ? AND strategy = ?
+        """, (str(chat_id), norm_strat)).fetchone()
+        
+    if not row:
+        return True
+        
+    is_enabled, min_threshold = row
+    if is_enabled == 0:
+        return False
+        
+    if min_threshold is not None and current_value is not None:
+        return abs(current_value) >= min_threshold
+        
+    return True
 
 def save_concept(user_id: str, concept_name: str, description: str, symbols: list, rules: dict) -> dict:
     init_db()

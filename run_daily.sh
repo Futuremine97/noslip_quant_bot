@@ -38,4 +38,8 @@ echo "7. Running Dynamic YouTube/Google Trends Crawler and sending report..."
 echo "8. Learning sector correlations and sending recommended-sector report..."
 ./services/trader/.venv/bin/python services/trader/sector_correlation.py
 
+# 9. Train GICS sector orbits and update trajectory models
+echo "9. Training sector orbits and updating trajectory models..."
+./services/trader/.venv/bin/python services/trader/sector_orbit_learner.py --train
+
 echo "=== [$(date)] S&P500 & Crypto Daily Job Completed ==="

@@ -496,6 +496,16 @@ def generate_message_1_market_summary_and_top_picks() -> str:
             lines.append(f"  • 현재: ${cur_price:.2f} (상승률: +{upside:.1f}% / 낙폭: {max_dd:.1f}%)")
             lines.append(f"  • 매수: ${buy_price:.2f} ({buy_date}) | 매도: ${sell_price:.2f} ({sell_date})")
 
+    # --- Drawdown Exclusions ---
+    drawdown_exclusions = map_data.get("drawdownExclusions", [])
+    if drawdown_exclusions:
+        lines.append("\n<b>🚫 장기 하락 우려 제외 종목 (Drawdown Exclusions)</b>")
+        for item in drawdown_exclusions[:5]:  # limit to top 5 exclusions for message length
+            symbol = item.get("symbol")
+            name = item.get("name", "N/A")[:15]
+            reason = item.get("reason", "N/A")
+            lines.append(f"  • <b>{symbol} ({name})</b>: {reason}")
+
     # --- 3. Prophet Daily/Monthly Optimal Strategy ---
     points = map_data.get("points", [])
     if not points:

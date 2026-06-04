@@ -3,6 +3,19 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
+const os = require("os");
+
+function enforceMachineAuth() {
+  const username = os.userInfo().username;
+  const hostname = os.hostname();
+  if (username !== "sunghoon" || !hostname.includes("Sunghoonss-MacBook-Air")) {
+    console.error(`❌ [Security Alert] Unauthorized machine/user detected: ${username}@${hostname}`);
+    console.error("This project is configured to run exclusively on sunghoon@Sunghoonss-MacBook-Air.");
+    process.exit(1);
+  }
+}
+enforceMachineAuth();
+
 const { execFile } = require("child_process");
 const { promisify } = require("util");
 const { URL } = require("url");
