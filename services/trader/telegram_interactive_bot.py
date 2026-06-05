@@ -929,12 +929,53 @@ def execute_portfolio_summary() -> str:
                 else:
                     consensus_pending = []
                 
-                # Format S&P 500 positions
+                # Format S&P 500 positions & Account Summary
+                import notifier
+                notifier.init_sp500_db()
+                
+                # Query realized metrics
+                completed_trades = conn.execute("SELECT realized_return FROM sp500_trade_log WHERE status = 'COMPLETED'").fetchall()
+                realized_usd = sum((float(t[0] or 0) / 100.0) * notifier.ALLOCATION_PER_TRADE for t in completed_trades)
+                total_completed = len(completed_trades)
+                wins = sum(1 for t in completed_trades if float(t[0] or 0) > 0)
+                win_rate = (wins / total_completed * 100.0) if total_completed > 0 else 0.0
+                
+                # Calculate unrealized metrics
+                unrealized_usd = 0.0
+                for pos in sp500_pending:
+                    sym = pos[0]
+                    entry = float(pos[1])
+                    cur = notifier.fetch_live_price(sym)
+                    if cur > 0:
+                        unrealized_ret = ((cur / entry) - 1.0) * 100.0
+                        unrealized_p = (unrealized_ret / 100.0) * notifier.ALLOCATION_PER_TRADE
+                        unrealized_usd += unrealized_p
+                        
+                total_pnl = realized_usd + unrealized_usd
+                current_capital = notifier.START_CAPITAL + total_pnl
+                
+                lines.append("💳 <b>S&P 500 가상 트레이딩 계좌 현황</b>")
+                lines.append(f"  • <b>평가 자산총액</b>: ${current_capital:,.2f} USD")
+                lines.append(f"  • <b>투자 원금</b>: ${notifier.START_CAPITAL:,.2f} USD")
+                lines.append(f"  • <b>누적 총 손익</b>: ${total_pnl:+,.2f} USD ({total_pnl/notifier.START_CAPITAL*100.0:+.2f}%)")
+                lines.append(f"  • <b>실현 손익 (Realized)</b>: ${realized_usd:+,.2f} USD")
+                lines.append(f"  • <b>평가 손익 (Unrealized)</b>: ${unrealized_usd:+,.2f} USD")
+                lines.append(f"  • <b>거래 승률</b>: {win_rate:.1f}% ({wins}승 / {total_completed - wins}패) | 총 {total_completed}회 청산")
+                lines.append("")
+                
                 lines.append("🇺🇸 <b>S&P 500 가상 매매 봇 포지션</b>")
                 if sp500_pending:
                     for sym, entry_p, target_p, entry_t, reason, p_trend, p_slope, p_weekly, p_monthly in sp500_pending:
                         entry_date = datetime.fromtimestamp(entry_t).strftime('%Y-%m-%d')
-                        lines.append(f"  • <b>{sym}</b>: 진입가 ${entry_p:,.2f} | 목표가 ${target_p:,.2f} ({entry_date} 진입)")
+                        # Calculate individual position unrealized return if possible
+                        cur = notifier.fetch_live_price(sym)
+                        pnl_str = ""
+                        if cur > 0:
+                            pnl_pct = ((cur / entry_p) - 1.0) * 100.0
+                            pnl_val = (pnl_pct / 100.0) * notifier.ALLOCATION_PER_TRADE
+                            pnl_str = f" | 현재 ${cur:,.2f} ({pnl_pct:+.2f}%, ${pnl_val:+,.2f})"
+                        
+                        lines.append(f"  • <b>{sym}</b>: 진입가 ${entry_p:,.2f} | 목표가 ${target_p:,.2f}{pnl_str} ({entry_date} 진입)")
                         if p_trend is not None:
                             p_slope_val = p_slope if p_slope is not None else 0.0
                             p_weekly_val = p_weekly if p_weekly is not None else 0.0
