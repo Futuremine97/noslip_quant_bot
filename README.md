@@ -93,8 +93,19 @@ An interactive, game-like Next.js React dashboard representing our cooperative q
 
 Our quant tools can be integrated directly into your Claude Code CLI agent as an agent plugin.
 
-### Method 1: Installing inside Claude Code Session (GitHub Shorthand)
-Inside an active Claude Code CLI session (chat interface), run the following slash commands:
+### Method 1: Installing Directly via Terminal Shell (Recommended)
+You can install our plugin directly from your terminal using `claude` CLI commands without starting an interactive session first:
+
+```bash
+# 1. Add our repository as a plugin marketplace
+claude plugin marketplace add Futuremine97/noslip_quant_bot
+
+# 2. Install the plugin from our marketplace
+claude plugin install noslip-quant@noslip-marketplace
+```
+
+### Method 2: Installing inside an Active Claude Code Session
+If you are already inside an active Claude Code CLI session (chat interface), run these slash commands:
 
 ```text
 # 1. Add our repository as a plugin marketplace
@@ -104,7 +115,7 @@ Inside an active Claude Code CLI session (chat interface), run the following sla
 /plugin install noslip-quant@noslip-marketplace
 ```
 
-### Method 2: Local Development Loading
+### Method 3: Local Development Loading
 If you clone the repository locally, you can load the plugin directly during startup:
 
 ```bash
