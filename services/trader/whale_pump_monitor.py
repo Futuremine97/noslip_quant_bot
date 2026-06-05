@@ -34,6 +34,12 @@ BINANCE_URL = "https://api.binance.com/api/v3/klines"
 ALERT_COOLDOWN_SECONDS = 15 * 60
 last_alert_times = {}
 
+# High-profit filters for Telegram Arbitrage Alerts (to prevent notification spam)
+MIN_ALERT_SPREAD_SPOT = 0.25         # 0.25% minimum spread for Spot Arbitrage Alerts
+MIN_ALERT_SPREAD_THREE_WAY = 0.25    # 0.25% minimum spread for 3-Way Arbitrage Alerts
+MIN_ALERT_KIMCHI_DEV = 0.30          # 0.30% premium deviation beyond min/max trigger for Kimchi alerts
+
+
 # Quant Account configuration
 START_CAPITAL = 10000.0   # $10,000 USD virtual starting balance
 ALLOCATION_PER_TRADE = 1000.0  # $1,000 USD allocated per trade
@@ -970,28 +976,32 @@ def check_signals_for_symbol(symbol: str, config: dict):
                     cheap_p = bybit_price if spread > 0 else current_price
                     exp_p = current_price if spread > 0 else bybit_price
                     
-                    lines = [
-                        f"⚖️ <b>[No Slip Arbitrage] 거래소간 차익 거래 포착 ({display_sym})</b>",
-                        "=" * 40,
-                        f"🔥 <b>{display_sym} 글로벌 거래소간 가격 괴리 발생</b>",
-                        f"  • Binance 가격: ${current_price:,.2f}",
-                        f"  • Bybit 가격: ${bybit_price:,.2f}",
-                        f"  • <b>현재 스프레드</b>: <b>{spread:+.3f}%</b> (기준치: {spread_trigger}%)",
-                        f"  • <b>진입 사유</b>: 두 거래소간 시세 괴리가 {abs_spread:.3f}%까지 확대되어 차익 발생",
-                        f"  • <b>매매 전략</b>: 글로벌 현물간 무위험 차익거래 (Spot-Spot Arbitrage)",
-                        f"  • <b>핵심 근거</b>: 동일 기초자산에 대해 다른 거래소간 시세가 단기 왜곡될 경우, 저평가 거래소에서 매수하고 고평가 거래소에서 매도하여 괴리 수렴 시 무위험 수익을 획득합니다.",
-                        "\n<b>🎯 차익거래 실행 방향 가이드</b>",
-                        f"  • <b>실행 방향</b>: {direction}",
-                        f"  • <b>매수 처 ({cheap_ex})</b>: ${cheap_p:,.2f}",
-                        f"  • <b>매도 처 ({exp_ex})</b>: ${exp_p:,.2f}",
-                        f"  • <b>목표 익절값 ({TP_spot_arb}%)</b>: 스프레드 {TP_spot_arb}% 수렴 또는 역전 시 전량 청산",
-                        f"  • <b>최대 홀딩시간</b>: {H_spot_arb}분",
-                        "\n💡 <b>알림 해석 가이드</b>",
-                        "• 차익 거래 알림 수신 시 즉시 저평가 거래소에서 매수하고 고평가 거래소에서 매도(혹은 선물 매도 헷징)를 진입합니다. 수렴이 빠르게 완료되므로 신속한 집행이 생명입니다.",
-                        "\n" + "=" * 40,
-                        f"※ 본 알림은 1분 단위 Binance-Bybit 실시간 시세 괴리 스캔 엔진에 의해 발송됩니다."
-                    ]
-                    send_telegram_message("\n".join(lines), strategy=strategy_spot_arb)
+                    # ALERT SPREAD FILTER: Only send Telegram alert if spread is high-profit
+                    if abs_spread >= MIN_ALERT_SPREAD_SPOT:
+                        from mlp_drop_predictor import should_halt_due_to_mlp_drop
+                        _, mlp_prob = should_halt_due_to_mlp_drop(symbol, df)
+                        
+                        lines = [
+                            f"⚖️ <b>[No Slip Arbitrage] 고수익 차익 거래 포착 ({display_sym})</b>",
+                            "=" * 40,
+                            f"🔥 <b>{display_sym} 글로벌 거래소간 가격 괴리 발생</b>",
+                            f"  • Binance 가격: ${current_price:,.2f}",
+                            f"  • Bybit 가격: ${bybit_price:,.2f}",
+                            f"  • <b>현재 스프레드</b>: <b>{spread:+.3f}%</b> (경보 임계치: {MIN_ALERT_SPREAD_SPOT}%)",
+                            f"  • <b>MLP 하락 위험도</b>: {mlp_prob:.1%} (검증 완료, 안전)",
+                            f"  • <b>매매 전략</b>: 글로벌 현물간 무위험 차익거래 (Spot-Spot Arbitrage)",
+                            "\n<b>🎯 차익거래 실행 방향 가이드</b>",
+                            f"  • <b>실행 방향</b>: {direction}",
+                            f"  • <b>매수 처 ({cheap_ex})</b>: ${cheap_p:,.2f}",
+                            f"  • <b>매도 처 ({exp_ex})</b>: ${exp_p:,.2f}",
+                            f"  • <b>목표 익절값 ({TP_spot_arb}%)</b>: 스프레드 {TP_spot_arb}% 수렴 시 전량 청산",
+                            f"  • <b>최대 홀딩시간</b>: {H_spot_arb}분",
+                            "\n" + "=" * 40,
+                            f"※ 본 알림은 MLP 필터 및 {MIN_ALERT_SPREAD_SPOT}% 고수익 필터링 엔진에 의해 선별된 알림입니다."
+                        ]
+                        send_telegram_message("\n".join(lines), strategy=strategy_spot_arb)
+                    else:
+                        print(f"ℹ️ [Alert Filtered] {symbol} spot arbitrage spread {abs_spread:.3f}% below high-profit threshold ({MIN_ALERT_SPREAD_SPOT}%). Alert skipped.")
 
     # ------------------ Strategy 6: Kimchi Premium Arbitrage ------------------
     strategy_kimchi_arb = "kimchi_arbitrage"
@@ -1033,27 +1043,33 @@ def check_signals_for_symbol(symbol: str, config: dict):
                     usd_rate = get_usd_krw_rate()
                     upbit_krw = upbit_price * usd_rate
                     
-                    lines = [
-                        f"🇰🇷 <b>[No Slip Kimchi] 김치 프리미엄 괴리 포착 ({display_sym})</b>",
-                        "=" * 40,
-                        f"🔥 <b>{display_sym} 국내-해외 거래소 가격 괴리 포착</b>",
-                        f"  • Binance 가격 (해외): ${current_price:,.2f}",
-                        f"  • Upbit 가격 (국내): ₩{upbit_krw:,.0f} (${upbit_price:,.2f})",
-                        f"  • <b>현재 김치 프리미엄</b>: <b>{premium:+.2f}%</b> (범위: {min_premium}% ~ {max_premium}%)",
-                        f"  • <b>진입 사유</b>: {reason}",
-                        f"  • <b>매매 전략</b>: 한국 프리미엄 차익거래 (Kimchi Premium Arbitrage)",
-                        f"  • <b>핵심 근거</b>: 한국 거래소의 외환 규제 및 수급 왜곡으로 유발되는 김프/역프 가격 편차를 이용해, 상대적으로 저평가된 시장에서 사고 고평가된 시장에서 매도하여 변동성을 차익화합니다.",
-                        "\n<b>🎯 차익거래 실행 방향 가이드</b>",
-                        f"  • <b>시장 상태</b>: {direction}",
-                        f"  • <b>추천 대응</b>: {action_desc}",
-                        f"  • <b>목표 익절값 ({TP_kimchi}%)</b>: 프리미엄 수렴시 청산",
-                        f"  • <b>최대 홀딩시간</b>: {H_kimchi}분",
-                        "\n💡 <b>알림 해석 가이드</b>",
-                        "• 역프(국내가 더 저렴) 일 때 구매하여 해외로 송금해 매도하는 테이커 전략이나, 김프가 급등할 때 헷징 숏 포지션을 해외에 잡고 국내 현물을 고가에 정리하는 전략 등으로 무위험 고수익 확보가 가능합니다.",
-                        "\n" + "=" * 40,
-                        f"※ 본 알림은 1분 단위 Upbit-Binance 프리미엄 실시간 스캔 엔진에 의해 발송됩니다."
-                    ]
-                    send_telegram_message("\n".join(lines), strategy=strategy_kimchi_arb)
+                    # ALERT PREMIUM FILTER: Only send Telegram alert if premium is highly profitable (deviation >= MIN_ALERT_KIMCHI_DEV)
+                    is_high_profit = (premium <= (min_premium - MIN_ALERT_KIMCHI_DEV)) or (premium >= (max_premium + MIN_ALERT_KIMCHI_DEV))
+                    
+                    if is_high_profit:
+                        from mlp_drop_predictor import should_halt_due_to_mlp_drop
+                        _, mlp_prob = should_halt_due_to_mlp_drop(symbol, df)
+                        
+                        lines = [
+                            f"🇰🇷 <b>[No Slip Kimchi] 고수익 김치 프리미엄 포착 ({display_sym})</b>",
+                            "=" * 40,
+                            f"🔥 <b>{display_sym} 국내-해외 거래소 가격 괴리 포착</b>",
+                            f"  • Binance 가격 (해외): ${current_price:,.2f}",
+                            f"  • Upbit 가격 (국내): ₩{upbit_krw:,.0f} (${upbit_price:,.2f})",
+                            f"  • <b>현재 김치 프리미엄</b>: <b>{premium:+.2f}%</b> (경보 하한: {min_premium - MIN_ALERT_KIMCHI_DEV:.2f}%, 상한: {max_premium + MIN_ALERT_KIMCHI_DEV:.2f}%)",
+                            f"  • <b>MLP 하락 위험도</b>: {mlp_prob:.1%} (검증 완료, 안전)",
+                            f"  • <b>매매 전략</b>: 한국 프리미엄 차익거래 (Kimchi Premium Arbitrage)",
+                            "\n<b>🎯 차익거래 실행 방향 가이드</b>",
+                            f"  • <b>시장 상태</b>: {direction}",
+                            f"  • <b>추천 대응</b>: {action_desc}",
+                            f"  • <b>목표 익절값 ({TP_kimchi}%)</b>: 프리미엄 수렴 시 청산",
+                            f"  • <b>최대 홀딩시간</b>: {H_kimchi}분",
+                            "\n" + "=" * 40,
+                            f"※ 본 알림은 MLP 필터 및 {MIN_ALERT_KIMCHI_DEV}% 추가 편차 고수익 필터링 엔진에 의해 선별된 알림입니다."
+                        ]
+                        send_telegram_message("\n".join(lines), strategy=strategy_kimchi_arb)
+                    else:
+                        print(f"ℹ️ [Alert Filtered] {symbol} kimchi premium {premium:+.2f}% is within normal range deviation. High-profit alert skipped.")
 
     # ------------------ Strategy 7: Multi-Exchange Arbitrage (Binance vs Bybit vs Upbit vs Bithumb vs Coinone) ------------------
     strategy_three_way_arb = "three_way_arbitrage"
@@ -1086,31 +1102,35 @@ def check_signals_for_symbol(symbol: str, config: dict):
                 if check_mlp_and_trigger_trade(symbol, cheapest_p, 0, spread_trigger_3, spread_3, H_three_way, SL_three_way, TP_three_way, strategy_three_way_arb, df, now, last_alert_times):
                     direction_desc = f"{cheapest_ex} 매수 (${cheapest_p:,.2f}) ➡️ {expensive_ex} 매도 (${expensive_p:,.2f}) 동시에 체결"
                     
-                    lines = [
-                        f"⚖️ <b>[No Slip Multi-Exchange Arbitrage] 다자간 무위험 차익거래 포착 ({display_sym})</b>",
-                        "=" * 40,
-                        f"🔥 <b>{display_sym} 5개 거래소간 최적 차익 기회 발생</b>",
-                        f"  • Binance 가격: ${current_price:,.2f}" if current_price > 0 else "  • Binance 가격: N/A",
-                        f"  • Bybit 가격: ${bybit_price:,.2f}" if bybit_price > 0 else "  • Bybit 가격: N/A",
-                        f"  • Upbit 가격 (USD): ${upbit_price:,.2f}" if upbit_price > 0 else "  • Upbit 가격 (USD): N/A",
-                        f"  • Bithumb 가격 (USD): ${bithumb_price:,.2f}" if bithumb_price > 0 else "  • Bithumb 가격 (USD): N/A",
-                        f"  • Coinone 가격 (USD): ${coinone_price:,.2f}" if coinone_price > 0 else "  • Coinone 가격 (USD): N/A",
-                        f"  • <b>최대 스프레드</b>: <b>{spread_3:+.3f}%</b> (기준치: {spread_trigger_3}%)",
-                        f"  • <b>최저가 거래소</b>: {cheapest_ex} (${cheapest_p:,.2f})",
-                        f"  • <b>최고가 거래소</b>: {expensive_ex} (${expensive_p:,.2f})",
-                        f"  • <b>진입 사유</b>: {len(prices)}개 거래소 간 가격 불균형으로 인해 무위험 스프레드 {spread_3:.3f}% 확보 가능",
-                        f"  • <b>매매 전략</b>: 다자간 동시 현물 차익거래 (Multi-Exchange Spot Arbitrage)",
-                        f"  • <b>핵심 근거</b>: 서로 다른 5개 거래소의 가격을 실시간으로 비교하여, 가장 저렴한 거래소에서 즉시 매수하고 동시에 가장 비싼 거래소에서 매도하여 가격 왜곡 수렴 시 확정적이고 리스크가 없는 차익을 실현합니다.",
-                        "\n<b>🎯 차익거래 실행 방향 가이드</b>",
-                        f"  • <b>실행 방향</b>: {direction_desc}",
-                        f"  • <b>목표 익절값 ({TP_three_way}%)</b>: 스프레드 {TP_three_way}% 수렴 시 전량 청산",
-                        f"  • <b>최대 홀딩시간</b>: {H_three_way}분",
-                        "\n💡 <b>알림 해석 가이드</b>",
-                        f"• 알림 수신 즉시 {cheapest_ex}에서 매수 주문과 {expensive_ex}에서 매도 주문을 동시에 집행합니다. 가격 수렴이 신속히 이루어지므로 각 거래소 간의 자동 전송 또는 실시간 원장 헷징이 중요합니다.",
-                        "\n" + "=" * 40,
-                        f"※ 본 알림은 1분 단위 Binance-Bybit-Upbit-Bithumb-Coinone 다자간 실시간 시세 스캔 엔진에 의해 발송됩니다."
-                    ]
-                    send_telegram_message("\n".join(lines), strategy=strategy_three_way_arb)
+                    # ALERT SPREAD FILTER: Only send Telegram alert if 3-way spread is high-profit
+                    if spread_3 >= MIN_ALERT_SPREAD_THREE_WAY:
+                        from mlp_drop_predictor import should_halt_due_to_mlp_drop
+                        _, mlp_prob = should_halt_due_to_mlp_drop(symbol, df)
+                        
+                        lines = [
+                            f"⚖️ <b>[No Slip Multi-Exchange Arbitrage] 고수익 다자간 차익거래 포착 ({display_sym})</b>",
+                            "=" * 40,
+                            f"🔥 <b>{display_sym} 5개 거래소간 최적 차익 기회 발생</b>",
+                            f"  • Binance 가격: ${current_price:,.2f}" if current_price > 0 else "  • Binance 가격: N/A",
+                            f"  • Bybit 가격: ${bybit_price:,.2f}" if bybit_price > 0 else "  • Bybit 가격: N/A",
+                            f"  • Upbit 가격 (USD): ${upbit_price:,.2f}" if upbit_price > 0 else "  • Upbit 가격 (USD): N/A",
+                            f"  • Bithumb 가격 (USD): ${bithumb_price:,.2f}" if bithumb_price > 0 else "  • Bithumb 가격 (USD): N/A",
+                            f"  • Coinone 가격 (USD): ${coinone_price:,.2f}" if coinone_price > 0 else "  • Coinone 가격 (USD): N/A",
+                            f"  • <b>최대 스프레드</b>: <b>{spread_3:+.3f}%</b> (경보 임계치: {MIN_ALERT_SPREAD_THREE_WAY}%)",
+                            f"  • <b>MLP 하락 위험도</b>: {mlp_prob:.1%} (검증 완료, 안전)",
+                            f"  • <b>최저가 거래소</b>: {cheapest_ex} (${cheapest_p:,.2f})",
+                            f"  • <b>최고가 거래소</b>: {expensive_ex} (${expensive_p:,.2f})",
+                            f"  • <b>매매 전략</b>: 다자간 동시 현물 차익거래 (Multi-Exchange Spot Arbitrage)",
+                            "\n<b>🎯 차익거래 실행 방향 가이드</b>",
+                            f"  • <b>실행 방향</b>: {direction_desc}",
+                            f"  • <b>목표 익절값 ({TP_three_way}%)</b>: 스프레드 {TP_three_way}% 수렴 시 전량 청산",
+                            f"  • <b>최대 홀딩시간</b>: {H_three_way}분",
+                            "\n" + "=" * 40,
+                            f"※ 본 알림은 MLP 필터 및 {MIN_ALERT_SPREAD_THREE_WAY}% 고수익 필터링 엔진에 의해 선별된 알림입니다."
+                        ]
+                        send_telegram_message("\n".join(lines), strategy=strategy_three_way_arb)
+                    else:
+                        print(f"ℹ️ [Alert Filtered] {symbol} three-way spread {spread_3:.3f}% below high-profit threshold ({MIN_ALERT_SPREAD_THREE_WAY}%). Alert skipped.")
 
 def main():
     global last_hourly_report_time
