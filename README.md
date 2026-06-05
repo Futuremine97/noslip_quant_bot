@@ -89,6 +89,29 @@ An interactive, game-like Next.js React dashboard representing our cooperative q
 
 ---
 
+## Claude Code CLI Plugin Integration
+
+Our quant tools can be integrated directly into your Claude Code CLI agent as an agent plugin.
+
+### Method 1: Direct installation from GitHub
+You can add the plugin directly to your Claude Code instance by pointing to the repository URL:
+```bash
+claude plugin add https://github.com/Futuremine97/noslip_quant_bot
+```
+
+### Method 2: Local development installation
+Alternatively, you can clone the repository and add the plugin locally:
+```bash
+# 1. Clone the repository
+git clone https://github.com/Futuremine97/noslip_quant_bot.git
+cd noslip_quant_bot
+
+# 2. Register the plugin to Claude Code
+claude plugin add .
+```
+
+---
+
 ## Claude Desktop MCP Server Integration
 
 No Slip includes a **Model Context Protocol (MCP)** JSON-RPC server that exposes our quant tools directly to your Claude Desktop AI assistant.
