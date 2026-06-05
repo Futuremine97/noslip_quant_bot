@@ -940,12 +940,14 @@ def execute_portfolio_summary() -> str:
                 wins = sum(1 for t in completed_trades if float(t[0] or 0) > 0)
                 win_rate = (wins / total_completed * 100.0) if total_completed > 0 else 0.0
                 
-                # Calculate unrealized metrics
+                # Calculate unrealized metrics (Limit yfinance calls to top 5 to prevent timeouts)
                 unrealized_usd = 0.0
-                for pos in sp500_pending:
+                for idx, pos in enumerate(sp500_pending):
                     sym = pos[0]
                     entry = float(pos[1])
-                    cur = notifier.fetch_live_price(sym)
+                    cur = 0.0
+                    if idx < 5:
+                        cur = notifier.fetch_live_price(sym)
                     if cur > 0:
                         unrealized_ret = ((cur / entry) - 1.0) * 100.0
                         unrealized_p = (unrealized_ret / 100.0) * notifier.ALLOCATION_PER_TRADE
@@ -958,16 +960,16 @@ def execute_portfolio_summary() -> str:
                 lines.append(f"  • <b>평가 자산총액</b>: ${current_capital:,.2f} USD")
                 lines.append(f"  • <b>투자 원금</b>: ${notifier.START_CAPITAL:,.2f} USD")
                 lines.append(f"  • <b>누적 총 손익</b>: ${total_pnl:+,.2f} USD ({total_pnl/notifier.START_CAPITAL*100.0:+.2f}%)")
-                lines.append(f"  • <b>실현 손익 (Realized)</b>: ${realized_usd:+,.2f} USD")
-                lines.append(f"  • <b>평가 손익 (Unrealized)</b>: ${unrealized_usd:+,.2f} USD")
+                lines.append(f"  • <b>실현 / 평가 손익</b>: ${realized_usd:+,.2f} / ${unrealized_usd:+,.2f} USD")
                 lines.append(f"  • <b>거래 승률</b>: {win_rate:.1f}% ({wins}승 / {total_completed - wins}패) | 총 {total_completed}회 청산")
                 lines.append("")
                 
-                lines.append("🇺🇸 <b>S&P 500 가상 매매 봇 포지션</b>")
+                lines.append("🇺🇸 <b>S&P 500 가상 매매 봇 포지션 (최신 5개 표시)</b>")
                 if sp500_pending:
-                    for sym, entry_p, target_p, entry_t, reason, p_trend, p_slope, p_weekly, p_monthly in sp500_pending:
+                    for idx, (sym, entry_p, target_p, entry_t, reason, p_trend, p_slope, p_weekly, p_monthly) in enumerate(sp500_pending):
+                        if idx >= 5:
+                            continue
                         entry_date = datetime.fromtimestamp(entry_t).strftime('%Y-%m-%d')
-                        # Calculate individual position unrealized return if possible
                         cur = notifier.fetch_live_price(sym)
                         pnl_str = ""
                         if cur > 0:
@@ -985,6 +987,8 @@ def execute_portfolio_summary() -> str:
                                 f"주간: {p_weekly_val*100.0:+.2f}%, 월간: {p_monthly_val*100.0:+.2f}%</i>"
                             )
                         lines.append(f"    └ <i>사유: {escape_html(reason)}</i>")
+                    if len(sp500_pending) > 5:
+                        lines.append(f"  • <b>외 {len(sp500_pending) - 5}개 종목</b> 추가 보유 중 (전체 현황은 웹에서 확인 가능)")
                 else:
                     lines.append("  • 현재 오픈된 포지션이 없습니다.")
                     
@@ -1010,12 +1014,16 @@ def execute_portfolio_summary() -> str:
                     
                 lines.append("-" * 40)
                 
-                # Format Consensus positions
-                lines.append("🤖 <b>6-Agent Consensus 추천 포지션</b>")
+                # Format Consensus positions (Limit to top 5)
+                lines.append("🤖 <b>6-Agent Consensus 추천 포지션 (최신 5개 표시)</b>")
                 if consensus_pending:
-                    for sym, entry_p, entry_t, score in consensus_pending:
+                    for idx, (sym, entry_p, entry_t, score) in enumerate(consensus_pending):
+                        if idx >= 5:
+                            continue
                         entry_date = datetime.fromtimestamp(entry_t).strftime('%Y-%m-%d')
                         lines.append(f"  • <b>{sym}</b>: 추천가 ${entry_p:,.2f} | 합의지수: {score*100.0:+.1f}% ({entry_date} 진입)")
+                    if len(consensus_pending) > 5:
+                        lines.append(f"  • <b>외 {len(consensus_pending) - 5}개 종목</b> 추천 포지션 유지 중")
                 else:
                     lines.append("  • 현재 추천된 오픈 포지션이 없습니다.")
                     
