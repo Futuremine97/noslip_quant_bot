@@ -1157,6 +1157,9 @@ def main():
     except Exception as e:
         print(f"⚠️ Error sending initial quant report: {e}")
         
+    last_sp500_open_trigger_date = ""
+    last_sp500_close_trigger_date = ""
+         
     while True:
         now = time.time()
         
@@ -1191,6 +1194,59 @@ def main():
                 last_hourly_report_time = now
             except Exception as e:
                 print(f"⚠️ Error sending hourly quant report: {e}")
+                
+        # 4. S&P500 US Market Opening and Closing Trades (Exactly twice a day on weekdays)
+        try:
+            import pytz
+            ny_tz = pytz.timezone("America/New_York")
+            now_ny = datetime.now(ny_tz)
+            
+            if now_ny.weekday() < 5:  # Weekdays only
+                today_ny_str = now_ny.strftime("%Y-%m-%d")
+                
+                # Market Open: 09:30 AM NY Time
+                if now_ny.hour == 9 and now_ny.minute == 30:
+                    if last_sp500_open_trigger_date != today_ny_str:
+                        print(f"🔔 [S&P500 Daemon] US Market Open at {now_ny}. Processing open trades...")
+                        from notifier import process_sp500_quant_trades, get_latest_map_data, send_telegram_message
+                        map_data = get_latest_map_data()
+                        if map_data:
+                            process_sp500_quant_trades(map_data)
+                            send_telegram_message(
+                                f"🔔 <b>[No Slip Quant] 미국 주식 시장 개장 (US Market Open)</b>\n"
+                                f"• 뉴욕 시간: {now_ny.strftime('%Y-%m-%d %H:%M')}\n"
+                                f"• S&P500 AI 탑 10 추천 포트폴리오를 기반으로 신규 가상 매수를 체결하고 기존 포지션을 모니터링합니다."
+                            )
+                        last_sp500_open_trigger_date = today_ny_str
+                
+                # Market Close: 04:00 PM NY Time
+                if now_ny.hour == 16 and now_ny.minute == 0:
+                    if last_sp500_close_trigger_date != today_ny_str:
+                        print(f"🔔 [S&P500 Daemon] US Market Close at {now_ny}. Processing close trades and report...")
+                        from notifier import (
+                            process_sp500_quant_trades,
+                            get_latest_map_data,
+                            generate_sp500_quant_report,
+                            generate_sp500_portfolio_pie_chart,
+                            send_telegram_message,
+                            send_telegram_photo
+                        )
+                        map_data = get_latest_map_data()
+                        if map_data:
+                            process_sp500_quant_trades(map_data)
+                            msg_quant = generate_sp500_quant_report()
+                            send_telegram_message(msg_quant)
+                            
+                            pie_path = str(ROOT_DIR / "data" / "sp500_portfolio_pie.png")
+                            if generate_sp500_portfolio_pie_chart(pie_path):
+                                caption = (
+                                    "🤖 <b>[No Slip Quant] S&P500 가상 포트폴리오 자산 배분 시각화</b>\n"
+                                    "※ 장 마감 기준 실시간 가상 매수매도 포지션 비율 및 현금 잔고 현황입니다."
+                                )
+                                send_telegram_photo(pie_path, caption)
+                        last_sp500_close_trigger_date = today_ny_str
+        except Exception as e:
+            print(f"⚠️ Error in S&P500 US Market scheduler: {e}")
                 
         # Wait 60 seconds
         time.sleep(60)

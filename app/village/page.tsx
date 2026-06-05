@@ -85,7 +85,7 @@ export default function QuantVillagePage() {
     },
   };
 
-  // Expanded BotCharacters list to include MLP agents and RL agent
+  // Expanded BotCharacters list to include MLP agents, RL agent, and S&P500 Trader
   const [bots, setBots] = useState<BotCharacter[]>([
     // Trader Bots
     { id: "btc", name: "BTC Trader (7호기)", color: "#F7931A", symbol: "₿", x: 130, y: 160, targetX: 130, targetY: 160, state: "idle", action: "working" },
@@ -99,6 +99,9 @@ export default function QuantVillagePage() {
     
     // RL Coordinator Bot
     { id: "rl_agent", name: "Federated RL Agent", color: "#c084fc", symbol: "RL_🧠", x: 400, y: 140, targetX: 400, targetY: 140, state: "idle", action: "working" },
+    
+    // S&P500 Trader Bot (AI)
+    { id: "sp500", name: "S&P500 Trader (AI)", color: "#ef4444", symbol: "📈", x: 300, y: 140, targetX: 300, targetY: 140, state: "idle", action: "working" },
   ]);
 
   // Specific computer terminals logs mock database
@@ -153,6 +156,10 @@ export default function QuantVillagePage() {
           `[${timeStr}] [RL Agent] Scoring daily Oh-seon report summary with Gemini API...`,
           `[${timeStr}] [RL Agent] Report Evaluation Score: 85/100. Critique generated.`,
           `[${timeStr}] [RL Agent] Current halt_threshold dynamic setting: ${marketStatus === "ALERT" ? "0.45 (Conservative)" : "0.50 (Normal)"}`,
+          `[${timeStr}] [S&P500 Trader] US Market opening check: 09:30 AM NY time (22:30 KST).`,
+          `[${timeStr}] [S&P500 Trader] US Market closing check: 04:00 PM NY time (05:00 KST).`,
+          `[${timeStr}] [S&P500 Trader] Loaded topPicks for virtual execution.`,
+          `[${timeStr}] [S&P500 Trader] Active portfolio value: $100,000 USD (Virtual).`,
         ];
       case "dorm":
         return [
@@ -212,6 +219,7 @@ export default function QuantVillagePage() {
       
       if (botId === "sol") return { x: 630, y: 150, action: "overclocking" as const };
       if (botId === "sol_mlp") return { x: 550, y: 150, action: "overclocking" as const };
+      if (botId === "sp500") return { x: 300, y: 140, action: "overclocking" as const };
       
       return { x: 400, y: 140, action: "overclocking" as const }; // rl_agent
     }
@@ -226,6 +234,7 @@ export default function QuantVillagePage() {
       
       if (botId === "sol") return { x: 630, y: 150, action: "researching" as const };
       if (botId === "sol_mlp") return { x: 550, y: 150, action: "researching" as const };
+      if (botId === "sp500") return { x: 300, y: 140, action: "working" as const };
       
       return { x: 400, y: 140, action: "working" as const }; // rl_agent
     }
@@ -240,6 +249,7 @@ export default function QuantVillagePage() {
       
       if (botId === "sol") return { x: 380, y: 200, action: "syncing" as const };
       if (botId === "sol_mlp") return { x: 420, y: 200, action: "syncing" as const };
+      if (botId === "sp500") return { x: 300, y: 200, action: "syncing" as const };
       
       return { x: 400, y: 140, action: "syncing" as const }; // rl_agent
     }
@@ -254,6 +264,7 @@ export default function QuantVillagePage() {
       
       if (botId === "sol") return { x: 400, y: 330, action: "socializing" as const };
       if (botId === "sol_mlp") return { x: 380, y: 340, action: "socializing" as const };
+      if (botId === "sp500") return { x: 410, y: 340, action: "socializing" as const };
       
       return { x: 400, y: 290, action: "socializing" as const }; // rl_agent
     }
@@ -268,6 +279,7 @@ export default function QuantVillagePage() {
       
       if (botId === "sol") return { x: 180, y: 410, action: "resting" as const }; // backing up servers
       if (botId === "sol_mlp") return { x: 550, y: 150, action: "resting" as const }; // cooling down at desk
+      if (botId === "sp500") return { x: 230, y: 410, action: "resting" as const }; // rest in lounge
       
       return { x: 160, y: 495, action: "resting" as const }; // rl_agent
     }
@@ -362,6 +374,7 @@ export default function QuantVillagePage() {
         sol: ["🚨 솔라나 트랙 탈출! 오라클 복귀!", "🚫 세이프 리밸런싱 실행!"],
         sol_mlp: ["🚨 [WARNING] 솔라나 궤적 변위치 낙폭 과대!", "🛡️ 오라클 긴급 필터 작동!"],
         rl_agent: ["👑 [RL Agent] 전원 매매 차단 및 쉘터 대기 프로토콜!", "👑 halt_threshold = 0.45 격상!"],
+        sp500: ["🚨 미장 대폭락 주의보! 주식 비중을 40%로 축소하고 안전자산으로 헤징합니다!"],
       };
       const arr = alerts[botId as keyof typeof alerts] || ["🚨 비상대피!"];
       return arr[Math.floor(Math.random() * arr.length)];
@@ -376,6 +389,7 @@ export default function QuantVillagePage() {
         sol: ["⚡ 오라클 제미나이와 야간 데이터 백서 속닥속닥.", "🔮 24시간 실시간 GICS 궤적 drift 로드."],
         sol_mlp: ["🧠 야간 SVD Centroid Transition 학습 중.", "🛡️ 야간 가중치 매트릭스 백업 성공."],
         rl_agent: ["👑 [RL Agent] 24시간 무중단 합의 가동 중. 켜두고 잔다.", "👑 야간 매매 config 락 체크 중."],
+        sp500: ["⚡ 미국 주식 시장 야간 선물 실시간 궤적 예측 중!", "📊 S&P500 인포메이션 맵 야간 오버클럭 분석 가동!"],
       };
       const arr = overclockLines[botId as keyof typeof overclockLines] || ["⚡ 야간 전산 오버클럭 가동 중."];
       return arr[Math.floor(Math.random() * arr.length)];
@@ -391,6 +405,7 @@ export default function QuantVillagePage() {
       if (botId === "btc_mlp") return "🛡️ 실시간 BTC 15분 단기 하락 확률 연산 중.";
       if (botId === "eth") return "🏺 업비트 김치 프리미엄 괴리 계산!";
       if (botId === "eth_mlp") return "🛡️ 해외-국내 가격 프리미엄 변동성 예측 중.";
+      if (botId === "sp500") return "🏛️ S&P500 AI 추천 포트폴리오를 기반으로 가상 매매 집행 중!";
       return "👑 에이전트 리스크 가중치 분배 중."; // rl_agent
     }
 
@@ -408,6 +423,7 @@ export default function QuantVillagePage() {
         sol: "🔮 제미나이가 내일 솔라나 리밸런싱 좋대.",
         sol_mlp: "🛡️ Utilities 섹터 궤적 속도 빨라짐.",
         rl_agent: "👑 애들아, FedAvg 학습할 때 동의 꼭 켜둬라.",
+        sp500: "🌸 미국 주식 시장 장개시와 장마감 시간을 대기하며 대칭성 분석 중.",
       };
       return chats[botId as keyof typeof chats] || "🤖 평화로운 퀀토피아.";
     }
@@ -432,8 +448,9 @@ export default function QuantVillagePage() {
             bot.id === "eth" ? 440 : 
             bot.id === "eth_mlp" ? 470 : 
             bot.id === "sol" ? 385 : 
-            bot.id === "sol_mlp" ? 415 : 400,
-          targetY: bot.id === "rl_agent" ? 140 : (bot.id.includes("mlp") ? 200 : 160),
+            bot.id === "sol_mlp" ? 415 : 
+            bot.id === "sp500" ? 300 : 400,
+          targetY: bot.id === "rl_agent" ? 140 : (bot.id === "sp500" ? 140 : (bot.id.includes("mlp") ? 200 : 160)),
           bubbleText: bot.id === "rl_agent" ? "📢 회의 준비!" : "🏃‍♂️ 회의 지각하겠다!",
           bubbleTimer: 45,
         }))
@@ -485,7 +502,7 @@ export default function QuantVillagePage() {
           state: "idle",
           bubbleText: bot.id.includes("mlp") ? "🛡️ 모델 최적화 완료!" : "✨ 전략 지도 업데이트 완료!",
           bubbleTimer: 50,
-          rewardFloating: bot.id === "btc" ? "+0.3024 Q" : bot.id === "eth" ? "-0.0003 Q" : bot.id === "sol" ? "+0.0154 Q" : undefined,
+          rewardFloating: bot.id === "btc" ? "+0.3024 Q" : bot.id === "eth" ? "-0.0003 Q" : bot.id === "sol" ? "+0.0154 Q" : (bot.id === "sp500" ? "+$42.50" : undefined),
         }))
       );
 
@@ -522,6 +539,7 @@ export default function QuantVillagePage() {
           else if (bot.id === "eth") { tx = 140; ty = 410; }
           else if (bot.id === "sol") { tx = 180; ty = 410; }
           else if (bot.id === "rl_agent") { tx = 220; ty = 410; }
+          else if (bot.id === "sp500") { tx = 260; ty = 410; }
           
           // MLP advisors lock down in their respective offices
           else if (bot.id === "btc_mlp") { tx = 210; ty = 150; }
