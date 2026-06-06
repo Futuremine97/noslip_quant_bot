@@ -212,3 +212,11 @@ To load a daemon:
 cp com.noslip.telegram.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.noslip.telegram.plist
 ```
+
+
+======================
+
+If this project helpful to you, please leave me a star 
+
+
+======================
