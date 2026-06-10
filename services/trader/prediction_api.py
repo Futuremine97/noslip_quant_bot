@@ -660,6 +660,109 @@ def get_alpha_signals(
     return {"ok": True, "signals": signals, "consensus": consensus}
 
 
+# ----------------- Personalized / Zero-shot Forecast Service -----------------
+# Domain-agnostic time-series SaaS: finance, semiconductor process (yield/SPC),
+# quantum error data (Stim logical error rates), or any generic series.
+
+def _pfs():
+    try:
+        from services.trader import personal_forecast_service as m
+    except ImportError:
+        import personal_forecast_service as m
+    return m
+
+
+class DatasetUpload(BaseModel):
+    user_id: str
+    name: str
+    domain: str = "generic"  # finance | semiconductor | quantum | generic
+    description: Optional[str] = ""
+    rows: List[dict]         # [{"ds": "...", "y": ...}] — ds may be date/round/shot
+
+
+class TrainRequest(BaseModel):
+    user_id: str
+    name: str
+
+
+class ZeroShotRequest(BaseModel):
+    domain: str = "generic"
+    days: int = 30
+    title: Optional[str] = "zero-shot"
+    rows: List[dict]
+
+
+@app.post("/personal/datasets")
+def upload_personal_dataset(
+    req: DatasetUpload,
+    authorization: Optional[str] = Header(default=None)
+) -> dict:
+    """Register a company/individual dataset for personalized model training."""
+    require_authorization(authorization)
+    try:
+        meta = _pfs().register_dataset(req.user_id, req.name, rows=req.rows,
+                                       domain=req.domain, description=req.description or "")
+        return {"ok": True, "dataset": meta}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/personal/train")
+def train_personal_dataset(
+    req: TrainRequest,
+    authorization: Optional[str] = Header(default=None)
+) -> dict:
+    """Hyperparameter-tuned Prophet training on the registered dataset."""
+    require_authorization(authorization)
+    try:
+        meta = _pfs().train_personal_model(req.user_id, req.name)
+        return {"ok": True, "model": meta}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/personal/forecast")
+def get_personal_forecast_api(
+    user_id: str,
+    name: str,
+    days: int = 30,
+    authorization: Optional[str] = Header(default=None)
+) -> dict:
+    """Serve a forecast from the user's stored personalized model (+anomalies)."""
+    require_authorization(authorization)
+    try:
+        result = _pfs().personal_forecast(user_id, name, days=clamp_int(days, default=30, minimum=1, maximum=365),
+                                          with_chart=False)
+        return {"ok": True, "forecast": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/personal/zero-shot")
+def zero_shot_forecast_api(
+    req: ZeroShotRequest,
+    authorization: Optional[str] = Header(default=None)
+) -> dict:
+    """Instant forecast on arbitrary uploaded rows — no stored state."""
+    require_authorization(authorization)
+    try:
+        result = _pfs().zero_shot_forecast(rows=req.rows, domain=req.domain,
+                                           days=req.days, with_chart=False,
+                                           title=req.title or "zero-shot")
+        return {"ok": True, "forecast": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/personal/datasets")
+def list_personal_datasets_api(
+    user_id: str,
+    authorization: Optional[str] = Header(default=None)
+) -> dict:
+    require_authorization(authorization)
+    return {"ok": True, "datasets": _pfs().list_datasets(user_id)}
+
+
 @app.get("/reinforcement-state")
 def reinforcement_state(authorization: Optional[str] = Header(default=None)) -> dict:
     require_authorization(authorization)

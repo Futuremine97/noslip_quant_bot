@@ -292,6 +292,78 @@ def main():
                                 }
                               }
                             }
+                          },
+                          {
+                            "name": "zero_shot_forecast",
+                            "description": "Instantly forecast ANY time series with zero setup — not just stocks/crypto. Supports domain presets: 'finance' (prices), 'semiconductor' (fab process metrics like yield %, defect density, with SPC control-limit anomaly detection), 'quantum' (Stim quantum-error-correction logical/physical error rates, log-scale, per round/shot), 'generic' (anything else).\n\nUse when the user provides a CSV path (or asks to forecast their own data) and wants an immediate prediction without registering a dataset.\n\nReturns forecast summary (end value, change %, 80% band, out-of-control anomalies) plus a rendered chart image.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "csv_path": {
+                                  "type": "string",
+                                  "description": "Path to a CSV with a time column (date/round/shot/step) and a value column (close/yield/error_rate/value...)."
+                                },
+                                "domain": {
+                                  "type": "string",
+                                  "description": "Domain preset.",
+                                  "enum": ["finance", "semiconductor", "quantum", "generic"]
+                                },
+                                "days": {
+                                  "type": "number",
+                                  "description": "Forecast horizon in periods/days (default 30)."
+                                }
+                              },
+                              "required": ["csv_path"]
+                            }
+                          },
+                          {
+                            "name": "train_personal_forecast",
+                            "description": "Register a company/individual dataset and train a PERSONALIZED time-series model on it (hyperparameter-tuned Prophet, persisted for repeated serving). Works for finance, semiconductor process data, quantum error (Stim) data, or any series.\n\nUse when the user wants an ongoing personalized forecasting service over their own data rather than a one-off prediction.\n\nReturns training metadata including holdout MAPE and chosen hyperparameters.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "user_id": {
+                                  "type": "string",
+                                  "description": "Owner identifier (company or person, e.g. 'acme' or 'sunghoon')."
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "description": "Dataset name (e.g. 'fab7_yield', 'qec_d5_error_rate', 'store_sales')."
+                                },
+                                "csv_path": {
+                                  "type": "string",
+                                  "description": "Path to the CSV to register and train on."
+                                },
+                                "domain": {
+                                  "type": "string",
+                                  "description": "Domain preset.",
+                                  "enum": ["finance", "semiconductor", "quantum", "generic"]
+                                }
+                              },
+                              "required": ["user_id", "name", "csv_path"]
+                            }
+                          },
+                          {
+                            "name": "get_personal_forecast",
+                            "description": "Serve a forecast from a previously trained personalized model, including SPC control-limit anomaly report (out-of-control points) for process/quantum domains.\n\nUse after train_personal_forecast to get predictions for a registered dataset.\n\nReturns forecast summary, anomaly list, and a rendered chart image.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "user_id": {
+                                  "type": "string",
+                                  "description": "Owner identifier used at training time."
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "description": "Registered dataset name."
+                                },
+                                "days": {
+                                  "type": "number",
+                                  "description": "Forecast horizon (default 30)."
+                                }
+                              },
+                              "required": ["user_id", "name"]
+                            }
                           }
                         ]
                     }
@@ -431,6 +503,45 @@ def main():
                     from peer_hub_client import view_signal_feed
                     result_text = view_signal_feed(arguments.get("symbol", "") or "",
                                                    int(arguments.get("limit", 20)))
+
+                elif tool_name in ("zero_shot_forecast", "train_personal_forecast",
+                                   "get_personal_forecast"):
+                    import base64 as _b64
+                    import personal_forecast_service as pfs
+                    chart_path = None
+                    if tool_name == "zero_shot_forecast":
+                        csv_path = arguments.get("csv_path")
+                        if not csv_path:
+                            raise ValueError("Missing csv_path argument")
+                        r = pfs.zero_shot_forecast(csv_path=csv_path,
+                                                   domain=arguments.get("domain", "generic"),
+                                                   days=int(arguments.get("days", 30)))
+                        chart_path = r.pop("chart", None)
+                        summary = "🔮 Zero-shot forecast 결과:\n\n" + json.dumps(r, ensure_ascii=False, indent=2)
+                    elif tool_name == "train_personal_forecast":
+                        user_id = arguments.get("user_id"); name = arguments.get("name")
+                        csv_path = arguments.get("csv_path")
+                        if not (user_id and name and csv_path):
+                            raise ValueError("Missing user_id/name/csv_path argument")
+                        pfs.register_dataset(user_id, name, csv_path=csv_path,
+                                             domain=arguments.get("domain", "generic"))
+                        meta = pfs.train_personal_model(user_id, name)
+                        summary = ("🎓 개인화 모델 학습 완료:\n\n"
+                                   + json.dumps(meta, ensure_ascii=False, indent=2))
+                    else:
+                        user_id = arguments.get("user_id"); name = arguments.get("name")
+                        if not (user_id and name):
+                            raise ValueError("Missing user_id/name argument")
+                        r = pfs.personal_forecast(user_id, name,
+                                                  days=int(arguments.get("days", 30)))
+                        chart_path = r.pop("chart", None)
+                        summary = ("📈 개인화 예측 결과 (SPC 이상치 포함):\n\n"
+                                   + json.dumps(r, ensure_ascii=False, indent=2))
+                    result_text = [{"type": "text", "text": summary}]
+                    if chart_path:
+                        with open(chart_path, "rb") as f:
+                            result_text.append({"type": "image", "mimeType": "image/png",
+                                                "data": _b64.b64encode(f.read()).decode()})
 
                 else:
                     raise ValueError(f"Unknown tool: {tool_name}")
