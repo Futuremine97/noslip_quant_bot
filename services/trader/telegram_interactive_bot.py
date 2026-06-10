@@ -300,12 +300,203 @@ def parse_federated_request(text: str) -> str:
             return text[len(prefix):].strip()
     return None
 
+def parse_prophet_request(text: str) -> str:
+    text = text.strip()
+    for prefix in ["/prophet ", "/프로펫 ", "/예측 "]:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    if text in ["/prophet", "/프로펫", "/예측"]:
+        return ""
+    return None
+
+def parse_cardnews_request(text: str) -> bool:
+    return text.strip() in ["/cardnews", "/카드뉴스", "/시황카드", "/카드"]
+
+def parse_onchain_request(text: str) -> bool:
+    return text.strip() in ["/onchain", "/온체인", "/고래온체인", "/온체인고래"]
+
+
 def parse_gemini_request(text: str) -> str:
     text = text.strip()
     for prefix in ["/gemini ", "/제미나이 ", "/gemini", "/제미나이"]:
         if text.startswith(prefix):
             return text[len(prefix):].strip()
     return None
+
+def parse_alpha_request(text: str) -> tuple[str, list[str]]:
+    text = text.strip()
+    for prefix in ["/alpha ", "/알파 ", "/alpha", "/알파"]:
+        if text.startswith(prefix):
+            remainder = text[len(prefix):].strip()
+            return "alpha", remainder.split()
+    return None, []
+
+def execute_alpha_command(chat_id: str, args: list[str]) -> str:
+    from personal_ontology import save_concept, get_concepts, delete_concept, evaluate_ontology_concept
+    
+    if not args:
+        # Help message
+        return (
+            "⚖️ <b>[No Slip AI Alpha Strategy Architect]</b>\n"
+            "=" * 40 + "\n"
+            "개개인의 거래 스타일(투자 성향)에 따라 차익거래 및 기술적 매매 전략을 체계화할 수 있도록 지원하는 개인 맞춤형 빌더입니다.\n\n"
+            "▶️ <b>1. 투자 성향(Persona) 설정 및 전략 파라미터 추천</b>\n"
+            "<code>/alpha [보수적 | 균형 | 공격적]</code>\n"
+            "  - <i>예: /alpha 보수적</i> (수수료 차감 후 고수익 차익거래 위주 추천)\n\n"
+            "▶️ <b>2. 개인별 전용 거래 컨셉(Ontology Concept) 및 규칙 등록</b>\n"
+            "<code>/alpha 등록 [컨셉명] [종목코드들] [규칙들]</code>\n"
+            "  - <i>예: /alpha 등록 내전략 BTCUSDT,ETHUSDT min_rsi=30 max_rsi=70 require_price_above_sma20=true expected_action=buy</i>\n"
+            "  - <b>등록 가능한 규칙</b>:\n"
+            "    • <code>min_price=값</code> / <code>max_price=값</code> (최저/최고가)\n"
+            "    • <code>min_rsi=값</code> / <code>max_rsi=값</code> (RSI 범위)\n"
+            "    • <code>require_price_above_sma20=true/false</code> (SMA20 위에 가격 위치 여부)\n"
+            "    • <code>expected_action=BUY/SELL</code> (AI 위원회 컨센서스 일치 여부)\n"
+            "    • <code>min_momentum=값</code> / <code>max_volatility=값</code> (모멘텀/변동성 범위)\n\n"
+            "▶️ <b>3. 등록한 전략의 실시간 진입 여부 조건 검증 (Audit)</b>\n"
+            "<code>/alpha 검증 [컨셉명]</code>\n"
+            "  - <i>예: /alpha 검증 내전략</i> (실시간 데이터로 등록 조건 충족 여부 체크)\n\n"
+            "▶️ <b>4. 개인별 전략 및 알림 설정 현황 확인</b>\n"
+            "<code>/alpha 현황</code> (또는 <code>/alpha 리스트</code>)\n"
+            "  - 등록된 모든 맞춤형 컨셉과 규칙들을 보여줍니다.\n\n"
+            "▶️ <b>5. 개인 전략 삭제</b>\n"
+            "<code>/alpha 삭제 [컨셉명]</code>\n"
+            "=" * 40
+        )
+
+    sub = args[0].lower()
+    
+    if sub in ["등록", "register"]:
+        if len(args) < 3:
+            return "⚠️ 형식을 확인해 주세요: <code>/alpha 등록 [컨셉명] [종목코드,종목코드] [규칙=값 규칙=값 ...]</code>"
+        
+        concept_name = args[1]
+        symbols_str = args[2]
+        symbols = [s.strip().upper() for s in symbols_str.split(",") if s.strip()]
+        
+        rules_dict = {}
+        for r in args[3:]:
+            if "=" in r:
+                parts_r = r.split("=", 1)
+                k = parts_r[0].strip().lower()
+                v = parts_r[1].strip()
+                if v.lower() == "true":
+                    rules_dict[k] = True
+                elif v.lower() == "false":
+                    rules_dict[k] = False
+                elif v.upper() in ["BUY", "SELL", "HOLD"]:
+                    rules_dict[k] = v.upper()
+                else:
+                    try:
+                        rules_dict[k] = float(v)
+                    except ValueError:
+                        rules_dict[k] = v
+                        
+        save_concept(str(chat_id), concept_name, "사용자 맞춤형 차익 및 기술적 전략", symbols, rules_dict)
+        
+        rules_desc = ", ".join([f"<code>{k}</code>: {v}" for k, v in rules_dict.items()])
+        return (
+            f"✅ <b>맞춤 전략 컨셉 '{concept_name}' 등록 완료!</b>\n"
+            f"• <b>대상 자산</b>: {', '.join(symbols)}\n"
+            f"• <b>적용 조건</b>: {rules_desc if rules_desc else '조건 없음'}\n\n"
+            f"▶️ 실시간 진입 조건 만족 여부는 <code>/alpha 검증 {concept_name}</code> 명령어로 언제든 체크할 수 있습니다."
+        )
+        
+    elif sub in ["검증", "verify"]:
+        if len(args) < 2:
+            return "⚠️ 검증할 전략 컨셉명을 입력해주세요. (예: <code>/alpha 검증 내전략</code>)"
+        concept_name = args[1]
+        return evaluate_ontology_concept(str(chat_id), concept_name)
+        
+    elif sub in ["현황", "리스트", "list"]:
+        concepts = get_concepts(str(chat_id))
+        if not concepts:
+            return "📋 현재 등록된 맞춤형 전략 컨셉이 없습니다. <code>/alpha 등록 ...</code>으로 나만의 전략을 만들어보세요!"
+            
+        lines = [
+            "📋 <b>[No Slip AI Alpha] 나의 맞춤형 전략 목록</b>",
+            "=" * 40
+        ]
+        for c in concepts:
+            rules_desc = ", ".join([f"<code>{k}</code>: {v}" for k, v in c["rules"].items()])
+            lines.append(
+                f"• <b>{c['concept_name']}</b>\n"
+                f"  - <b>대상 자산</b>: {', '.join(c['symbols'])}\n"
+                f"  - <b>규칙 조건</b>: {rules_desc if rules_desc else '없음'}\n"
+                f"  - <b>최근 수정</b>: {c['updated_at'][:19].replace('T', ' ')}"
+            )
+            lines.append("-" * 30)
+        lines.append("\n▶️ 특정 전략을 실시간 검증하려면 <code>/alpha 검증 [컨셉명]</code>을 입력하세요.")
+        return "\n".join(lines)
+        
+    elif sub in ["삭제", "delete"]:
+        if len(args) < 2:
+            return "⚠️ 삭제할 전략 컨셉명을 입력해주세요. (예: <code>/alpha 삭제 내전략</code>)"
+        concept_name = args[1]
+        if delete_concept(str(chat_id), concept_name):
+            return f"🗑️ 맞춤 전략 컨셉 <b>{concept_name}</b> 삭제 완료."
+        else:
+            return f"⚠️ '{concept_name}' 전략 컨셉을 찾을 수 없습니다."
+            
+    elif sub in ["보수적", "conservative"]:
+        return (
+            "🛡️ <b>보수적 투자 성향 (Conservative) 권장 파라미터 셋</b>\n"
+            "=" * 40 + "\n"
+            "안정적이고 수수료 차감 후 확정 수익률이 높은 거래만 노리는 스타일입니다.\n\n"
+            "💡 <b>추천 설정 가이드</b>:\n"
+            "• <b>현물 차익거래 (Spot Arbitrage)</b>\n"
+            "  - <code>TP (익절)</code>: 0.15% | <code>SL (손절)</code>: 0.30%\n"
+            "  - <code>H (대기시간)</code>: 5분 | <code>진입 스프레드</code>: 0.15% 이상\n\n"
+            "• <b>김치프리미엄 차익거래 (Kimchi Arbitrage)</b>\n"
+            "  - <code>H</code>: 120분 | <code>TP</code>: 0.50% | <code>SL</code>: 1.00%\n"
+            "  - <code>진입 조건</code>: 역프 -1.5% 이하 매수 / 김프 4.5% 이상 매도\n\n"
+            "• <b>고래 수급 추적 (Whale Pump)</b>\n"
+            "  - <code>X (1분거래대금 증가율)</code>: 0.50% 이상 (강력한 신호만)\n"
+            "  - <code>V (1분 거래량배수)</code>: 3.5x 이상\n\n"
+            "▶️ <b>전략 설정 명령어 (예시)</b>:\n"
+            "<code>/알림온 김프 1.5</code> (수수료 차감 후 1.5% 이상 괴리시에만 알림)"
+        )
+        
+    elif sub in ["균형", "balanced"]:
+        return (
+            "⚖️ <b>균형형 투자 성향 (Balanced) 권장 파라미터 셋</b>\n"
+            "=" * 40 + "\n"
+            "시장 평균적인 변동성을 감내하면서 합리적인 손익비(Risk/Reward)를 노리는 스타일입니다.\n\n"
+            "💡 <b>추천 설정 가이드</b>:\n"
+            "• <b>현물 차익거래 (Spot Arbitrage)</b>\n"
+            "  - <code>TP (익절)</code>: 0.30% | <code>SL (손절)</code>: 0.50%\n"
+            "  - <code>H (대기시간)</code>: 10분 | <code>진입 스프레드</code>: 0.12% 이상\n\n"
+            "• <b>김치프리미엄 차익거래 (Kimchi Arbitrage)</b>\n"
+            "  - <code>H</code>: 60분 | <code>TP</code>: 1.00% | <code>SL</code>: 1.50%\n"
+            "  - <code>진입 조건</code>: 역프 -1.0% 이하 매수 / 김프 4.0% 이상 매도\n\n"
+            "• <b>고래 수급 추적 (Whale Pump)</b>\n"
+            "  - <code>X (1분거래대금 증가율)</code>: 0.40% 이상\n"
+            "  - <code>V (1분 거래량배수)</code>: 2.0x 이상\n\n"
+            "▶️ <b>전략 설정 명령어 (예시)</b>:\n"
+            "<code>/알림온 rsi</code> (RSI 반등 알림 받기)"
+        )
+        
+    elif sub in ["공격적", "aggressive"]:
+        return (
+            "🔥 <b>공격적 투자 성향 (Aggressive) 권장 파라미터 셋</b>\n"
+            "=" * 40 + "\n"
+            "빠른 순환매와 변동성을 활용하여 단기 차익 기회를 극대화하는 스타일입니다.\n\n"
+            "💡 <b>추천 설정 가이드</b>:\n"
+            "• <b>현물 차익거래 (Spot Arbitrage)</b>\n"
+            "  - <code>TP (익절)</code>: 0.50% | <code>SL (손절)</code>: 0.80%\n"
+            "  - <code>H (대기시간)</code>: 15분 | <code>진입 스프레드</code>: 0.10% 이상\n\n"
+            "• <b>김치프리미엄 차익거래 (Kimchi Arbitrage)</b>\n"
+            "  - <code>H</code>: 30분 | <code>TP</code>: 1.50% | <code>SL</code>: 2.00%\n"
+            "  - <code>진입 조건</code>: 역프 -0.5% 이하 매수 / 김프 3.5% 이상 매도\n\n"
+            "• <b>고래 수급 추적 (Whale Pump)</b>\n"
+            "  - <code>X (1분거래대금 증가율)</code>: 0.30% 이상 (민감하게 포착)\n"
+            "  - <code>V (1분 거래량배수)</code>: 1.5x 이상\n\n"
+            "▶️ <b>전략 설정 명령어 (예시)</b>:\n"
+            "<code>/알림온 spot_arbitrage 0.10</code>"
+        )
+        
+    else:
+        return f"⚠️ 유효하지 않은 옵션입니다: <code>{args[0]}</code>\n\n<code>/alpha</code> 를 입력하여 사용 가능한 명령 목록을 확인하세요."
+
 
 def sanitize_telegram_html(text: str) -> str:
     """Strips invalid HTML tags and escapes special characters for Telegram compatibility."""
@@ -1500,7 +1691,132 @@ def generate_agent_replies(symbol: str, user_opinion: str) -> str:
         
     return format_debate_reply(symbol, user_opinion, trend_reply, value_reply, whale_reply)
 
+def generate_and_save_prophet_forecast_plot(symbol: str, photo_path: Path) -> dict:
+    import pandas as pd
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from prophet import Prophet
+    
+    # Fetch data
+    df = fetch_ticker_data(symbol)
+    if df.empty or len(df) < 30:
+        raise ValueError(f"Not enough historical data for {symbol} to run Prophet.")
+        
+    # Prepare data for Prophet
+    df_prophet = pd.DataFrame()
+    df_prophet['ds'] = df.index.tz_localize(None)
+    df_prophet['y'] = df['Close'].values
+    
+    # Use last 365 days for training to keep it fast and relevant
+    df_train = df_prophet.tail(365).copy()
+    
+    # Fit Prophet model
+    m = Prophet(
+        changepoint_prior_scale=0.05,
+        yearly_seasonality=False,
+        weekly_seasonality=True,
+        daily_seasonality=False
+    )
+    m.fit(df_train)
+    
+    # Predict next 30 days
+    future = m.make_future_dataframe(periods=30, freq='D')
+    forecast = m.predict(future)
+    
+    # Renders the plot
+    fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
+    fig.patch.set_facecolor("#121212")
+    ax.set_facecolor("#1a1a1a")
+    
+    # Plot historical actuals
+    ax.plot(df_train['ds'], df_train['y'], color="#aaaaaa", label="Actual Price", linewidth=1.5, alpha=0.8)
+    
+    # Plot forecast
+    forecast_future = forecast[forecast['ds'] > df_train['ds'].max()]
+    forecast_history = forecast[forecast['ds'] <= df_train['ds'].max()]
+    
+    # Plot in-sample fit
+    ax.plot(forecast_history['ds'], forecast_history['yhat'], color="#555555", linestyle="--", linewidth=1.0, alpha=0.5)
+    
+    # Plot out-of-sample forecast
+    ax.plot(forecast_future['ds'], forecast_future['yhat'], color="#00f5d4", label="Prophet Forecast", linewidth=2.0)
+    
+    # Plot uncertainty interval
+    ax.fill_between(
+        forecast_future['ds'],
+        forecast_future['yhat_lower'],
+        forecast_future['yhat_upper'],
+        color="#00f5d4",
+        alpha=0.15,
+        label="Uncertainty Interval"
+    )
+    
+    # Design styling
+    ax.set_title(f"{symbol} Price Forecast (30 Days)", fontsize=16, fontweight="bold", color="#ffffff", pad=15)
+    ax.set_xlabel("Date", fontsize=11, color="#aaaaaa", labelpad=10)
+    ax.set_ylabel("Price ($)", fontsize=11, color="#aaaaaa", labelpad=10)
+    
+    ax.grid(True, which="both", color="#2a2a2a", linestyle=":", linewidth=0.5, zorder=0)
+    ax.tick_params(colors="#aaaaaa", labelsize=9)
+    for spine in ax.spines.values():
+        spine.set_color("#333333")
+        
+    ax.legend(loc='upper left', frameon=True, facecolor='#1a1a1a', edgecolor='#333333', labelcolor='#ffffff', fontsize=9)
+    
+    # Add annotations for current price and 30-day forecast price
+    cur_price = df_train['y'].iloc[-1]
+    last_ds = df_train['ds'].iloc[-1]
+    
+    projected_price = forecast_future['yhat'].iloc[-1]
+    projected_ds = forecast_future['ds'].iloc[-1]
+    
+    return_pct = ((projected_price - cur_price) / cur_price) * 100
+    
+    bbox_props = dict(boxstyle="round,pad=0.3", fc="#262626", ec="none", alpha=0.8)
+    
+    # Annotate current price
+    ax.annotate(
+        f"Current: ${cur_price:.2f}",
+        xy=(last_ds, cur_price),
+        xytext=(-40, 15),
+        textcoords="offset points",
+        arrowprops=dict(arrowstyle="->", color="#aaaaaa", lw=0.8),
+        color="#ffffff",
+        fontsize=9,
+        fontweight="bold",
+        bbox=bbox_props
+    )
+    
+    # Annotate projected price
+    ax.annotate(
+        f"Forecast: ${projected_price:.2f}\n({return_pct:+.2f}%)",
+        xy=(projected_ds, projected_price),
+        xytext=(-70, -35),
+        textcoords="offset points",
+        arrowprops=dict(arrowstyle="->", color="#00f5d4", lw=0.8),
+        color="#00f5d4",
+        fontsize=9,
+        fontweight="bold",
+        bbox=bbox_props
+    )
+    
+    plt.tight_layout()
+    photo_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(photo_path, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
+    plt.close(fig)
+    
+    return {
+        "current_price": cur_price,
+        "projected_price": projected_price,
+        "return_pct": return_pct,
+        "lower_bound": forecast_future['yhat_lower'].iloc[-1],
+        "upper_bound": forecast_future['yhat_upper'].iloc[-1]
+    }
+
 def generate_and_save_infomap_plot(photo_path: Path) -> dict:
+
     import json
     import numpy as np
     import matplotlib
@@ -1755,6 +2071,31 @@ def main():
                     reply_to_telegram(chat_id, features_report, message_id)
                     continue
 
+                # 0.3. Parse Card News Request
+                if parse_cardnews_request(text):
+                    print(f"🗞️ Received card news request from chat {chat_id}")
+                    reply_to_telegram(chat_id, "⏳ <b>오늘의 시황 카드뉴스 5장을 생성 중입니다. 약 20~40초 소요됩니다...</b>", message_id)
+                    try:
+                        from daily_card_news import generate_card_news
+                        generate_card_news(send=True)
+                    except Exception as e:
+                        print(f"⚠️ Error executing card news: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 카드뉴스 생성 중 오류가 발생했습니다: {escape_html(str(e))}", message_id)
+                    continue
+
+                # 0.4. Parse On-chain Whale Report Request
+                if parse_onchain_request(text):
+                    print(f"🐋 Received on-chain whale report request from chat {chat_id}")
+                    reply_to_telegram(chat_id, "⏳ <b>BTC/ETH 온체인 고래 트랜잭션을 스캔 중입니다. 약 10~20초 소요됩니다...</b>", message_id)
+                    try:
+                        from whale_onchain_monitor import generate_onchain_report
+                        report = generate_onchain_report(html=True)
+                        reply_to_telegram(chat_id, report, message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error executing on-chain whale report: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 온체인 고래 리포트 생성 중 오류가 발생했습니다: {escape_html(str(e))}", message_id)
+                    continue
+
                 # 0.5. Parse YouTube Crawl Request
                 is_yt, yt_keyword = parse_youtube_request(text)
                 if is_yt:
@@ -1998,7 +2339,47 @@ def main():
                         print(f"⚠️ Error executing infomap request: {e}")
                         reply_to_telegram(chat_id, f"⚠️ 정보맵 시각화 생성 중 오류가 발생했습니다: {e}", message_id)
 
+                # 0.999. Parse Prophet Request
+                prophet_arg = parse_prophet_request(text)
+                if prophet_arg is not None:
+                    if not prophet_arg:
+                        help_text = (
+                            "📊 <b>No Slip AI Prophet 30일 가격 예측 시각화</b>\n"
+                            "=" * 35 + "\n"
+                            "특정 자산의 최근 365일 데이터를 학습하여 향후 30일간의 가격 흐름과 신뢰 구간을 시각화합니다.\n\n"
+                            "▶️ 사용법: <code>/prophet [종목명/티커]</code>\n"
+                            "  (예: <code>/prophet AAPL</code> 또는 <code>/prophet BTC-USD</code>)\n"
+                            "=" * 35
+                        )
+                        reply_to_telegram(chat_id, help_text, message_id)
+                    else:
+                        print(f"📈 Received Prophet forecast request for '{prophet_arg}' from chat {chat_id}")
+                        reply_to_telegram(chat_id, f"⏳ <b>{prophet_arg}의 최근 데이터를 수집하여 Prophet 시각화 차트를 생성 중입니다...</b>", message_id)
+                        try:
+                            # Normalize ticker symbol
+                            symbol = normalize_symbol(prophet_arg)
+                            photo_path = ROOT_DIR / "data" / f"prophet_forecast_{symbol.lower()}.png"
+                            
+                            stats = generate_and_save_prophet_forecast_plot(symbol, photo_path)
+                            
+                            caption_lines = [
+                                f"📈 <b>Prophet Price Forecast for {symbol}</b>",
+                                "=" * 35,
+                                f"• <b>현재 가격</b>: ${stats['current_price']:.2f}",
+                                f"• <b>30일 뒤 예측가</b>: ${stats['projected_price']:.2f} ({stats['return_pct']:+.2f}%)",
+                                f"• <b>예측 신뢰구간 (80%)</b>: ${stats['lower_bound']:.2f} ~ ${stats['upper_bound']:.2f}",
+                                "=" * 35,
+                                "※ 본 예측은 Facebook Prophet 시계열 알고리즘 기반 스캔 결과이며 투자 참고용입니다."
+                            ]
+                            caption = "\n".join(caption_lines)
+                            reply_photo_to_telegram(chat_id, str(photo_path), caption, message_id)
+                        except Exception as e:
+                            print(f"⚠️ Error executing prophet request: {e}")
+                            reply_to_telegram(chat_id, f"⚠️ Prophet 예측 생성 중 오류가 발생했습니다: {e} (yfinance에서 지원하는 티커인지 확인해 주세요.)", message_id)
+                    continue
+
                 # Parse Gemini Chat/Debate Request
+
                 gemini_query = parse_gemini_request(text)
                 if gemini_query is not None:
                     if not gemini_query:
@@ -2020,6 +2401,20 @@ def main():
                         except Exception as e:
                             print(f"⚠️ Error executing gemini chat: {e}")
                             reply_to_telegram(chat_id, f"⚠️ 제미나이 처리 중 오류가 발생했습니다: {e}", message_id)
+                    continue
+
+                # Parse Alpha Strategy Request
+                alpha_cmd, alpha_args = parse_alpha_request(text)
+                if alpha_cmd is not None:
+                    print(f"⚖️ Received Alpha command request with args {alpha_args} from chat {chat_id}")
+                    if len(alpha_args) >= 2 and (alpha_args[0] in ["검증", "verify"]):
+                        reply_to_telegram(chat_id, "⏳ <b>실시간 시장 데이터를 수집하여 맞춤형 규칙들을 검증하고 있습니다. (약 5초 소요)...</b>", message_id)
+                    try:
+                        reply_msg = execute_alpha_command(str(chat_id), alpha_args)
+                        reply_to_telegram(chat_id, reply_msg, message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error executing alpha command: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ Alpha 처리 중 오류가 발생했습니다: {e}", message_id)
                     continue
 
                 # 0.990. Parse Sector Recommendation Request

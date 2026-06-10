@@ -39,6 +39,14 @@ MIN_ALERT_SPREAD_SPOT = 0.25         # 0.25% minimum spread for Spot Arbitrage A
 MIN_ALERT_SPREAD_THREE_WAY = 0.25    # 0.25% minimum spread for 3-Way Arbitrage Alerts
 MIN_ALERT_KIMCHI_DEV = 0.30          # 0.30% premium deviation beyond min/max trigger for Kimchi alerts
 
+# Exchange transaction fees (in % percentage)
+EXCHANGE_FEES = {
+    "Binance": 0.10,   # Binance spot taker fee: 0.1%
+    "Bybit": 0.10,     # Bybit spot taker fee: 0.1%
+    "Upbit": 0.05,     # Upbit KRW spot taker fee: 0.05%
+    "Bithumb": 0.04,   # Bithumb spot flat rate: 0.04%
+    "Coinone": 0.20    # Coinone spot taker fee: 0.2%
+}
 
 # Quant Account configuration
 START_CAPITAL = 10000.0   # $10,000 USD virtual starting balance
@@ -962,10 +970,14 @@ def check_signals_for_symbol(symbol: str, config: dict):
         spread = ((current_price / bybit_price) - 1.0) * 100.0
         abs_spread = abs(spread)
         
-        if abs_spread >= spread_trigger:
+        # Consider exchange fees (Binance fee + Bybit fee)
+        total_fee = EXCHANGE_FEES["Binance"] + EXCHANGE_FEES["Bybit"]
+        net_spread = abs_spread - total_fee
+        
+        if net_spread >= spread_trigger:
             last_alert = last_alert_times.get((symbol, strategy_spot_arb), 0)
             if now - last_alert >= ALERT_COOLDOWN_SECONDS:
-                if check_mlp_and_trigger_trade(symbol, current_price, 0, spread_trigger, spread, H_spot_arb, SL_spot_arb, TP_spot_arb, strategy_spot_arb, df, now, last_alert_times):
+                if check_mlp_and_trigger_trade(symbol, current_price, 0, spread_trigger, net_spread, H_spot_arb, SL_spot_arb, TP_spot_arb, strategy_spot_arb, df, now, last_alert_times):
                     # Exits targets (simulation tracks directional TP/SL)
                     tp_price = current_price * (1.0 + TP_spot_arb / 100.0) if spread > 0 else current_price * (1.0 - TP_spot_arb / 100.0)
                     sl_price = current_price * (1.0 - SL_spot_arb / 100.0) if spread > 0 else current_price * (1.0 + SL_spot_arb / 100.0)
@@ -976,8 +988,8 @@ def check_signals_for_symbol(symbol: str, config: dict):
                     cheap_p = bybit_price if spread > 0 else current_price
                     exp_p = current_price if spread > 0 else bybit_price
                     
-                    # ALERT SPREAD FILTER: Only send Telegram alert if spread is high-profit
-                    if abs_spread >= MIN_ALERT_SPREAD_SPOT:
+                    # ALERT SPREAD FILTER: Only send Telegram alert if net spread is high-profit
+                    if net_spread >= MIN_ALERT_SPREAD_SPOT:
                         from mlp_drop_predictor import should_halt_due_to_mlp_drop
                         _, mlp_prob = should_halt_due_to_mlp_drop(symbol, df)
                         
@@ -985,23 +997,25 @@ def check_signals_for_symbol(symbol: str, config: dict):
                             f"⚖️ <b>[No Slip Arbitrage] 고수익 차익 거래 포착 ({display_sym})</b>",
                             "=" * 40,
                             f"🔥 <b>{display_sym} 글로벌 거래소간 가격 괴리 발생</b>",
-                            f"  • Binance 가격: ${current_price:,.2f}",
-                            f"  • Bybit 가격: ${bybit_price:,.2f}",
-                            f"  • <b>현재 스프레드</b>: <b>{spread:+.3f}%</b> (경보 임계치: {MIN_ALERT_SPREAD_SPOT}%)",
+                            f"  • Binance 가격: ${current_price:,.2f} (수수료: {EXCHANGE_FEES['Binance']}%)",
+                            f"  • Bybit 가격: ${bybit_price:,.2f} (수수료: {EXCHANGE_FEES['Bybit']}%)",
+                            f"  • 총 거래 수수료: {total_fee:.2f}%",
+                            f"  • 세전 스프레드: {spread:+.3f}%",
+                            f"  • <b>실제 순수익 스프레드 (Net)</b>: <b>{net_spread:+.3f}%</b> (경보 임계치: {MIN_ALERT_SPREAD_SPOT}%)",
                             f"  • <b>MLP 하락 위험도</b>: {mlp_prob:.1%} (검증 완료, 안전)",
                             f"  • <b>매매 전략</b>: 글로벌 현물간 무위험 차익거래 (Spot-Spot Arbitrage)",
                             "\n<b>🎯 차익거래 실행 방향 가이드</b>",
                             f"  • <b>실행 방향</b>: {direction}",
                             f"  • <b>매수 처 ({cheap_ex})</b>: ${cheap_p:,.2f}",
                             f"  • <b>매도 처 ({exp_ex})</b>: ${exp_p:,.2f}",
-                            f"  • <b>목표 익절값 ({TP_spot_arb}%)</b>: 스프레드 {TP_spot_arb}% 수렴 시 전량 청산",
+                            f"  • <b>목표 익절값 ({TP_spot_arb}%)</b>: 순수익 {TP_spot_arb}% 수렴 시 전량 청산",
                             f"  • <b>최대 홀딩시간</b>: {H_spot_arb}분",
                             "\n" + "=" * 40,
-                            f"※ 본 알림은 MLP 필터 및 {MIN_ALERT_SPREAD_SPOT}% 고수익 필터링 엔진에 의해 선별된 알림입니다."
+                            f"※ 본 알림은 수수료 차감 후 Net {MIN_ALERT_SPREAD_SPOT}% 고수익 필터링 엔진에 의해 선별되었습니다."
                         ]
                         send_telegram_message("\n".join(lines), strategy=strategy_spot_arb)
                     else:
-                        print(f"ℹ️ [Alert Filtered] {symbol} spot arbitrage spread {abs_spread:.3f}% below high-profit threshold ({MIN_ALERT_SPREAD_SPOT}%). Alert skipped.")
+                        print(f"ℹ️ [Alert Filtered] {symbol} spot arbitrage net spread {net_spread:.3f}% below high-profit threshold ({MIN_ALERT_SPREAD_SPOT}%). Alert skipped.")
 
     # ------------------ Strategy 6: Kimchi Premium Arbitrage ------------------
     strategy_kimchi_arb = "kimchi_arbitrage"
@@ -1019,32 +1033,36 @@ def check_signals_for_symbol(symbol: str, config: dict):
     if upbit_price > 0:
         premium = ((upbit_price / current_price) - 1.0) * 100.0
         
+        # Consider exchange fees (Binance fee + Upbit fee)
+        total_fee = EXCHANGE_FEES["Binance"] + EXCHANGE_FEES["Upbit"]
+        net_premium = premium - total_fee if premium > 0 else premium + total_fee
+        
         trigger_kimchi = False
         direction = ""
         action_desc = ""
         reason = ""
         
-        if premium <= min_premium:
+        if net_premium <= min_premium:
             trigger_kimchi = True
             direction = "역프 발생 (Reverse Premium)"
             action_desc = "Upbit 매수 (KRW) ➡️ Binance 매도 (USD) 또는 송금 후 해외 매도"
-            reason = f"김치 프리미엄이 {premium:+.2f}%로 임계치인 {min_premium}%를 하회하여 해외 대비 역프리가 심화되었습니다."
-        elif premium >= max_premium:
+            reason = f"실제 순수익 프리미엄(Net)이 {net_premium:+.2f}%로 하한 임계치인 {min_premium}%를 하회하여 해외 대비 역프리가 심화되었습니다."
+        elif net_premium >= max_premium:
             trigger_kimchi = True
             direction = "김프 과열 (High Kimchi Premium)"
             action_desc = "Binance 매수 (USD) ➡️ Upbit 매도 (KRW) 또는 국내 보유 자산 해외로 송금/헷징"
-            reason = f"김치 프리미엄이 {premium:+.2f}%로 임계치인 {max_premium}%를 상회하여 국내 매수세가 과열되었습니다."
+            reason = f"실제 순수익 프리미엄(Net)이 {net_premium:+.2f}%로 상한 임계치인 {max_premium}%를 상회하여 국내 매수세가 과열되었습니다."
             
         if trigger_kimchi:
             last_alert = last_alert_times.get((symbol, strategy_kimchi_arb), 0)
             if now - last_alert >= ALERT_COOLDOWN_SECONDS:
-                if check_mlp_and_trigger_trade(symbol, current_price, 0, min_premium, premium, H_kimchi, SL_kimchi, TP_kimchi, strategy_kimchi_arb, df, now, last_alert_times):
+                if check_mlp_and_trigger_trade(symbol, current_price, 0, min_premium, net_premium, H_kimchi, SL_kimchi, TP_kimchi, strategy_kimchi_arb, df, now, last_alert_times):
                     # Fetch KRW price for display
                     usd_rate = get_usd_krw_rate()
                     upbit_krw = upbit_price * usd_rate
                     
-                    # ALERT PREMIUM FILTER: Only send Telegram alert if premium is highly profitable (deviation >= MIN_ALERT_KIMCHI_DEV)
-                    is_high_profit = (premium <= (min_premium - MIN_ALERT_KIMCHI_DEV)) or (premium >= (max_premium + MIN_ALERT_KIMCHI_DEV))
+                    # ALERT PREMIUM FILTER: Only send Telegram alert if net premium is highly profitable
+                    is_high_profit = (net_premium <= (min_premium - MIN_ALERT_KIMCHI_DEV)) or (net_premium >= (max_premium + MIN_ALERT_KIMCHI_DEV))
                     
                     if is_high_profit:
                         from mlp_drop_predictor import should_halt_due_to_mlp_drop
@@ -1054,9 +1072,11 @@ def check_signals_for_symbol(symbol: str, config: dict):
                             f"🇰🇷 <b>[No Slip Kimchi] 고수익 김치 프리미엄 포착 ({display_sym})</b>",
                             "=" * 40,
                             f"🔥 <b>{display_sym} 국내-해외 거래소 가격 괴리 포착</b>",
-                            f"  • Binance 가격 (해외): ${current_price:,.2f}",
-                            f"  • Upbit 가격 (국내): ₩{upbit_krw:,.0f} (${upbit_price:,.2f})",
-                            f"  • <b>현재 김치 프리미엄</b>: <b>{premium:+.2f}%</b> (경보 하한: {min_premium - MIN_ALERT_KIMCHI_DEV:.2f}%, 상한: {max_premium + MIN_ALERT_KIMCHI_DEV:.2f}%)",
+                            f"  • Binance 가격 (해외): ${current_price:,.2f} (수수료: {EXCHANGE_FEES['Binance']}%)",
+                            f"  • Upbit 가격 (국내): ₩{upbit_krw:,.0f} (${upbit_price:,.2f}) (수수료: {EXCHANGE_FEES['Upbit']}%)",
+                            f"  • 총 거래 수수료: {total_fee:.2f}%",
+                            f"  • 세전 프리미엄: {premium:+.2f}%",
+                            f"  • <b>실제 순수익 프리미엄 (Net)</b>: <b>{net_premium:+.2f}%</b> (경보 하한: {min_premium - MIN_ALERT_KIMCHI_DEV:.2f}%, 상한: {max_premium + MIN_ALERT_KIMCHI_DEV:.2f}%)",
                             f"  • <b>MLP 하락 위험도</b>: {mlp_prob:.1%} (검증 완료, 안전)",
                             f"  • <b>매매 전략</b>: 한국 프리미엄 차익거래 (Kimchi Premium Arbitrage)",
                             "\n<b>🎯 차익거래 실행 방향 가이드</b>",
@@ -1065,11 +1085,11 @@ def check_signals_for_symbol(symbol: str, config: dict):
                             f"  • <b>목표 익절값 ({TP_kimchi}%)</b>: 프리미엄 수렴 시 청산",
                             f"  • <b>최대 홀딩시간</b>: {H_kimchi}분",
                             "\n" + "=" * 40,
-                            f"※ 본 알림은 MLP 필터 및 {MIN_ALERT_KIMCHI_DEV}% 추가 편차 고수익 필터링 엔진에 의해 선별된 알림입니다."
+                            f"※ 본 알림은 수수료 차감 후 Net premium 기준 고수익 필터링 엔진에 의해 선별되었습니다."
                         ]
                         send_telegram_message("\n".join(lines), strategy=strategy_kimchi_arb)
                     else:
-                        print(f"ℹ️ [Alert Filtered] {symbol} kimchi premium {premium:+.2f}% is within normal range deviation. High-profit alert skipped.")
+                        print(f"ℹ️ [Alert Filtered] {symbol} kimchi premium net {net_premium:+.2f}% is within normal range deviation. High-profit alert skipped.")
 
     # ------------------ Strategy 7: Multi-Exchange Arbitrage (Binance vs Bybit vs Upbit vs Bithumb vs Coinone) ------------------
     strategy_three_way_arb = "three_way_arbitrage"
@@ -1092,18 +1112,51 @@ def check_signals_for_symbol(symbol: str, config: dict):
         prices.append(("Coinone", coinone_price))
         
     if len(prices) >= 2:
-        cheapest_ex, cheapest_p = min(prices, key=lambda x: x[1])
-        expensive_ex, expensive_p = max(prices, key=lambda x: x[1])
-        spread_3 = ((expensive_p / cheapest_p) - 1.0) * 100.0
+        best_pair = None
+        max_net_spread = -999.0
         
-        if spread_3 >= spread_trigger_3:
+        for i in range(len(prices)):
+            for j in range(len(prices)):
+                if i == j:
+                    continue
+                buy_ex, buy_p = prices[i]
+                sell_ex, sell_p = prices[j]
+                
+                if sell_p > buy_p:
+                    raw_spread = ((sell_p / buy_p) - 1.0) * 100.0
+                    fee_buy = EXCHANGE_FEES.get(buy_ex, 0.10)
+                    fee_sell = EXCHANGE_FEES.get(sell_ex, 0.10)
+                    total_fee = fee_buy + fee_sell
+                    net_spread = raw_spread - total_fee
+                    
+                    if net_spread > max_net_spread:
+                        max_net_spread = net_spread
+                        best_pair = {
+                            "buy_ex": buy_ex,
+                            "buy_p": buy_p,
+                            "sell_ex": sell_ex,
+                            "sell_p": sell_p,
+                            "raw_spread": raw_spread,
+                            "total_fee": total_fee,
+                            "net_spread": net_spread
+                        }
+                        
+        if best_pair and best_pair["net_spread"] >= spread_trigger_3:
             last_alert = last_alert_times.get((symbol, strategy_three_way_arb), 0)
             if now - last_alert >= ALERT_COOLDOWN_SECONDS:
-                if check_mlp_and_trigger_trade(symbol, cheapest_p, 0, spread_trigger_3, spread_3, H_three_way, SL_three_way, TP_three_way, strategy_three_way_arb, df, now, last_alert_times):
+                cheapest_ex = best_pair["buy_ex"]
+                cheapest_p = best_pair["buy_p"]
+                expensive_ex = best_pair["sell_ex"]
+                expensive_p = best_pair["sell_p"]
+                spread_3 = best_pair["raw_spread"]
+                net_spread = best_pair["net_spread"]
+                total_fee = best_pair["total_fee"]
+                
+                if check_mlp_and_trigger_trade(symbol, cheapest_p, 0, spread_trigger_3, net_spread, H_three_way, SL_three_way, TP_three_way, strategy_three_way_arb, df, now, last_alert_times):
                     direction_desc = f"{cheapest_ex} 매수 (${cheapest_p:,.2f}) ➡️ {expensive_ex} 매도 (${expensive_p:,.2f}) 동시에 체결"
                     
-                    # ALERT SPREAD FILTER: Only send Telegram alert if 3-way spread is high-profit
-                    if spread_3 >= MIN_ALERT_SPREAD_THREE_WAY:
+                    # ALERT SPREAD FILTER: Only send Telegram alert if 3-way net spread is high-profit
+                    if net_spread >= MIN_ALERT_SPREAD_THREE_WAY:
                         from mlp_drop_predictor import should_halt_due_to_mlp_drop
                         _, mlp_prob = should_halt_due_to_mlp_drop(symbol, df)
                         
@@ -1116,21 +1169,24 @@ def check_signals_for_symbol(symbol: str, config: dict):
                             f"  • Upbit 가격 (USD): ${upbit_price:,.2f}" if upbit_price > 0 else "  • Upbit 가격 (USD): N/A",
                             f"  • Bithumb 가격 (USD): ${bithumb_price:,.2f}" if bithumb_price > 0 else "  • Bithumb 가격 (USD): N/A",
                             f"  • Coinone 가격 (USD): ${coinone_price:,.2f}" if coinone_price > 0 else "  • Coinone 가격 (USD): N/A",
-                            f"  • <b>최대 스프레드</b>: <b>{spread_3:+.3f}%</b> (경보 임계치: {MIN_ALERT_SPREAD_THREE_WAY}%)",
+                            f"  • 최저가 거래소 (매수): {cheapest_ex} (${cheapest_p:,.2f}, 수수료: {EXCHANGE_FEES.get(cheapest_ex, 0.10)}%)",
+                            f"  • 최고가 거래소 (매도): {expensive_ex} (${expensive_p:,.2f}, 수수료: {EXCHANGE_FEES.get(expensive_ex, 0.10)}%)",
+                            f"  • 총 거래 수수료: {total_fee:.2f}%",
+                            f"  • 세전 스프레드: {spread_3:+.3f}%",
+                            f"  • <b>실제 순수익 스프레드 (Net)</b>: <b>{net_spread:+.3f}%</b> (경보 임계치: {MIN_ALERT_SPREAD_THREE_WAY}%)",
                             f"  • <b>MLP 하락 위험도</b>: {mlp_prob:.1%} (검증 완료, 안전)",
-                            f"  • <b>최저가 거래소</b>: {cheapest_ex} (${cheapest_p:,.2f})",
-                            f"  • <b>최고가 거래소</b>: {expensive_ex} (${expensive_p:,.2f})",
                             f"  • <b>매매 전략</b>: 다자간 동시 현물 차익거래 (Multi-Exchange Spot Arbitrage)",
                             "\n<b>🎯 차익거래 실행 방향 가이드</b>",
                             f"  • <b>실행 방향</b>: {direction_desc}",
-                            f"  • <b>목표 익절값 ({TP_three_way}%)</b>: 스프레드 {TP_three_way}% 수렴 시 전량 청산",
+                            f"  • <b>목표 익절값 ({TP_three_way}%)</b>: 순수익 {TP_three_way}% 수렴 시 전량 청산",
                             f"  • <b>최대 홀딩시간</b>: {H_three_way}분",
                             "\n" + "=" * 40,
-                            f"※ 본 알림은 MLP 필터 및 {MIN_ALERT_SPREAD_THREE_WAY}% 고수익 필터링 엔진에 의해 선별된 알림입니다."
+                            f"※ 본 알림은 수수료 차감 후 Net {MIN_ALERT_SPREAD_THREE_WAY}% 고수익 필터링 엔진에 의해 선별되었습니다."
                         ]
                         send_telegram_message("\n".join(lines), strategy=strategy_three_way_arb)
                     else:
-                        print(f"ℹ️ [Alert Filtered] {symbol} three-way spread {spread_3:.3f}% below high-profit threshold ({MIN_ALERT_SPREAD_THREE_WAY}%). Alert skipped.")
+                        print(f"ℹ️ [Alert Filtered] {symbol} three-way net spread {net_spread:.3f}% below high-profit threshold ({MIN_ALERT_SPREAD_THREE_WAY}%). Alert skipped.")
+
 
 def main():
     global last_hourly_report_time

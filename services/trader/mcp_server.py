@@ -208,6 +208,90 @@ def main():
                                 }
                               }
                             }
+                          },
+                          {
+                            "name": "get_alpha_recommendations",
+                            "description": "Get recommended strategy parameters (Take-Profit, Stop-Loss, holding time, and threshold ranges) for various arbitrage and technical indicators based on a user's risk tolerance persona ('conservative', 'balanced', or 'aggressive').\n\nUse this when the user asks for guidance on setting parameters or configuring their custom strategies.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "persona": {
+                                  "type": "string",
+                                  "description": "The investment persona style. Choose from 'conservative', 'balanced', or 'aggressive'.",
+                                  "enum": ["conservative", "balanced", "aggressive"]
+                                }
+                              },
+                              "required": ["persona"]
+                            }
+                          },
+                          {
+                            "name": "register_peer",
+                            "description": "Join (or heartbeat into) the No Slip Quant Peer Hub: the community of users running this Claude Code plugin. Registers a stable local peer identity with the central server so other plugin users can see you online and read your shared signals.\n\nUse this the first time a user wants to connect with other plugin users, or to update their nickname/bio. Network call that writes presence data.\n\nReturns a confirmation with the registered nickname and peer_id.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "nickname": {
+                                  "type": "string",
+                                  "description": "Public display name shown to other plugin users (e.g. 'Futuremine97'). Omit to keep the current/default name."
+                                },
+                                "bio": {
+                                  "type": "string",
+                                  "description": "Optional one-line introduction shown in the peer roster."
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "name": "list_peers",
+                            "description": "Show the roster of plugin users connected to the No Slip Quant Peer Hub, with online presence (recent heartbeat), bios, and each peer's best Prophet leaderboard score.\n\nUse this when the user asks who else is online, who is in the community, or wants to compare standings. Read-only network call.\n\nReturns a human-readable roster.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {}
+                            }
+                          },
+                          {
+                            "name": "share_alpha_signal",
+                            "description": "Broadcast a trading idea (alpha signal) to every user connected to the Peer Hub: symbol, BUY/SELL/HOLD direction, confidence, and an optional thesis.\n\nUse this when the user wants to share their view on an asset with the community. Network call that writes to the shared feed under the user's registered nickname.\n\nReturns a confirmation of the shared signal.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "symbol": {
+                                  "type": "string",
+                                  "description": "Asset ticker (e.g. 'NVDA', 'BTC-USD')."
+                                },
+                                "direction": {
+                                  "type": "string",
+                                  "description": "Signal direction.",
+                                  "enum": ["BUY", "SELL", "HOLD"]
+                                },
+                                "confidence": {
+                                  "type": "number",
+                                  "description": "Confidence 0-100 (%)."
+                                },
+                                "thesis": {
+                                  "type": "string",
+                                  "description": "Optional short rationale shown with the signal (max 500 chars)."
+                                }
+                              },
+                              "required": ["symbol", "direction", "confidence"]
+                            }
+                          },
+                          {
+                            "name": "view_signal_feed",
+                            "description": "Read the shared alpha-signal feed from the Peer Hub: recent BUY/SELL/HOLD calls from all connected plugin users, plus a per-symbol consensus tally.\n\nUse this when the user asks what other users are trading, what the community thinks about an asset, or wants the latest shared ideas. Read-only network call.\n\nReturns a human-readable feed with consensus summary.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "symbol": {
+                                  "type": "string",
+                                  "description": "Optional ticker filter (e.g. 'NVDA'). Omit for the full feed."
+                                },
+                                "limit": {
+                                  "type": "number",
+                                  "description": "Max signals to return (1-100, default 20)."
+                                }
+                              }
+                            }
                           }
                         ]
                     }
@@ -293,10 +377,61 @@ def main():
                     
                 elif tool_name == "view_prophet_leaderboard":
                     symbol = arguments.get("symbol")
-                    
+
                     from leaderboard_sync import fetch_leaderboard_report
                     result_text = fetch_leaderboard_report(symbol)
-                    
+
+                elif tool_name == "get_alpha_recommendations":
+                    persona = arguments.get("persona", "balanced").strip().lower()
+                    presets = {
+                        "conservative": {
+                            "take_profit_pct": "0.8 ~ 1.5", "stop_loss_pct": "0.4 ~ 0.8",
+                            "max_hold_minutes": "30 ~ 60", "rsi_trigger": "20 ~ 25",
+                            "spot_arb_threshold_pct": "0.35+", "kimchi_threshold_pct": "0.45+",
+                            "note": "낮은 빈도·높은 확실성 진입. 손절 타이트, 차익거래 임계치 보수적."
+                        },
+                        "balanced": {
+                            "take_profit_pct": "1.5 ~ 3.0", "stop_loss_pct": "0.8 ~ 1.5",
+                            "max_hold_minutes": "60 ~ 180", "rsi_trigger": "25 ~ 30",
+                            "spot_arb_threshold_pct": "0.25+", "kimchi_threshold_pct": "0.30+",
+                            "note": "기본 운영값. whale_config.json 기본 파라미터와 유사."
+                        },
+                        "aggressive": {
+                            "take_profit_pct": "3.0 ~ 6.0", "stop_loss_pct": "1.5 ~ 2.5",
+                            "max_hold_minutes": "180 ~ 480", "rsi_trigger": "30 ~ 35",
+                            "spot_arb_threshold_pct": "0.15+", "kimchi_threshold_pct": "0.20+",
+                            "note": "높은 빈도·큰 변동 허용. MLP 하락 필터 활성 상태 유지 권장."
+                        },
+                    }
+                    rec = presets.get(persona)
+                    if not rec:
+                        raise ValueError(f"Unknown persona: {persona} (choose conservative/balanced/aggressive)")
+                    result_text = (f"🎯 '{persona}' 페르소나 권장 전략 파라미터:\n\n"
+                                   + json.dumps(rec, indent=2, ensure_ascii=False))
+
+                elif tool_name == "register_peer":
+                    from peer_hub_client import register_peer
+                    result_text = register_peer(arguments.get("nickname", ""), arguments.get("bio", ""))
+
+                elif tool_name == "list_peers":
+                    from peer_hub_client import list_peers
+                    result_text = list_peers()
+
+                elif tool_name == "share_alpha_signal":
+                    symbol = arguments.get("symbol")
+                    direction = arguments.get("direction")
+                    confidence = arguments.get("confidence")
+                    if not symbol or not direction or confidence is None:
+                        raise ValueError("Missing symbol/direction/confidence argument")
+                    from peer_hub_client import share_alpha_signal
+                    result_text = share_alpha_signal(symbol, direction, float(confidence),
+                                                     arguments.get("thesis", ""))
+
+                elif tool_name == "view_signal_feed":
+                    from peer_hub_client import view_signal_feed
+                    result_text = view_signal_feed(arguments.get("symbol", "") or "",
+                                                   int(arguments.get("limit", 20)))
+
                 else:
                     raise ValueError(f"Unknown tool: {tool_name}")
                     
