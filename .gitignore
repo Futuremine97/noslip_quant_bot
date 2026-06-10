@@ -78,3 +78,12 @@ data/*.json
 *.swp
 .swp
 **/*.swp
+
+# local dev / generated assets (not for repo)
+scratch/
+data/mascot_poses/
+data/card_news/
+test_image.jpg
+.claude/
+services/trader/model_cache/peer_identity.json
+services/trader/scratch_test_alpha.py

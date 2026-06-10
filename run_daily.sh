@@ -42,4 +42,12 @@ echo "8. Learning sector correlations and sending recommended-sector report..."
 echo "9. Training sector orbits and updating trajectory models..."
 ./services/trader/.venv/bin/python services/trader/sector_orbit_learner.py --train
 
+# 10. Generate S&P500 Infomap plot and publish report to Instagram
+echo "10. Generating S&P500 Infomap and publishing to Instagram..."
+./services/trader/.venv/bin/python services/trader/instagram_publisher.py
+
+# 11. Generate daily market card news (5 cards) -> Telegram album + Instagram carousel
+echo "11. Generating daily market card news and broadcasting..."
+./services/trader/.venv/bin/python services/trader/daily_card_news.py --instagram
+
 echo "=== [$(date)] S&P500 & Crypto Daily Job Completed ==="

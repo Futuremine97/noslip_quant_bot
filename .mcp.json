@@ -6,6 +6,20 @@
         "-u",
         "/path/to/your/cloned/repository/services/trader/mcp_server.py"
       ]
+    },
+    "figma": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-figma"],
+      "env": {
+        "FIGMA_PERSONAL_ACCESS_TOKEN": "<YOUR_FIGMA_PAT>"
+      }
+    },
+    "pinterest": {
+      "command": "npx",
+      "args": ["-y", "pinterest-mcp-server"],
+      "env": {
+        "PINTEREST_ACCESS_TOKEN": "<YOUR_PINTEREST_TOKEN>"
+      }
     }
   }
 }
