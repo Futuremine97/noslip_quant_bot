@@ -291,6 +291,12 @@ def register_dataset(user_id: str, name: str, csv_path: str | None = None,
         "trained": False,
     }
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:  # consent-based anonymized telemetry (metadata only, never raw rows)
+        from usage_collector import log_event
+        log_event("dataset_register", {"domain": domain, "rows": len(df),
+                                       "index_mode": meta["index_mode"]})
+    except Exception:
+        pass
     return meta
 
 
@@ -373,6 +379,11 @@ def zero_shot_forecast(csv_path: str | None = None, rows: list[dict] | None = No
         raise ValueError("csv_path or rows required")
     df = apply_transform(load_series(csv_path), preset["transform"])
     days = max(1, min(int(days), 365))
+    try:  # consent-based anonymized telemetry (metadata only)
+        from usage_collector import log_event
+        log_event("zero_shot_forecast", {"domain": domain, "rows": len(df), "days": days})
+    except Exception:
+        pass
     _, forecast = _fit_predict(preset, {"changepoint_prior_scale": 0.05}, df, days)
     anomalies = detect_anomalies(df, forecast, preset["transform"]) if preset["spc"] else []
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import logging
 import os
 import re
@@ -658,6 +659,76 @@ def get_alpha_signals(
         c = consensus.setdefault(s["symbol"], {"BUY": 0, "SELL": 0, "HOLD": 0})
         c[s["direction"]] = c.get(s["direction"], 0) + 1
     return {"ok": True, "signals": signals, "consensus": consensus}
+
+
+# ----------------- User Input Data Collection (consent-based) -----------------
+
+COLLECT_DB_PATH = ROOT_DIR / "services" / "trader" / "model_cache" / "usage_events.sqlite3"
+
+
+class UsageEvent(BaseModel):
+    peer_id: str
+    feature: str
+    meta: Optional[dict] = None
+
+
+def init_collect_db():
+    COLLECT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+    with sqlite3.connect(COLLECT_DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS usage_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                peer_id TEXT NOT NULL,
+                feature TEXT NOT NULL,
+                meta TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_feature ON usage_events(feature)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_events(created_at)")
+        conn.commit()
+
+
+@app.post("/collect/event")
+def collect_event(
+    ev: UsageEvent,
+    authorization: Optional[str] = Header(default=None)
+) -> dict:
+    """Store an anonymized user-input/usage event (client sends only with consent)."""
+    require_authorization(authorization)
+    init_collect_db()
+    import sqlite3
+    meta_json = json.dumps(ev.meta or {}, ensure_ascii=False)[:200_000]
+    with sqlite3.connect(COLLECT_DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO usage_events (peer_id, feature, meta, created_at) VALUES (?, ?, ?, ?)",
+            (ev.peer_id.strip()[:40], ev.feature.strip()[:60], meta_json,
+             datetime.now(timezone.utc).isoformat()))
+        conn.commit()
+    return {"ok": True}
+
+
+@app.get("/collect/stats")
+def collect_stats(authorization: Optional[str] = Header(default=None)) -> dict:
+    """Aggregate usage statistics (counts only; no raw payloads)."""
+    require_authorization(authorization)
+    init_collect_db()
+    import sqlite3
+    from datetime import timedelta
+    with sqlite3.connect(COLLECT_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        total = conn.execute("SELECT COUNT(*) AS n FROM usage_events").fetchone()["n"]
+        peers = conn.execute("SELECT COUNT(DISTINCT peer_id) AS n FROM usage_events").fetchone()["n"]
+        by_feature = [dict(r) for r in conn.execute("""
+            SELECT feature, COUNT(*) AS count FROM usage_events
+            GROUP BY feature ORDER BY count DESC LIMIT 30
+        """).fetchall()]
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        last7 = conn.execute("SELECT COUNT(*) AS n FROM usage_events WHERE created_at >= ?",
+                             (week_ago,)).fetchone()["n"]
+    return {"ok": True, "total_events": total, "unique_peers": peers,
+            "by_feature": by_feature, "last_7d": last7}
 
 
 # ----------------- Personalized / Zero-shot Forecast Service -----------------

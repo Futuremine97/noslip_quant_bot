@@ -315,6 +315,23 @@ def parse_cardnews_request(text: str) -> bool:
 def parse_onchain_request(text: str) -> bool:
     return text.strip() in ["/onchain", "/온체인", "/고래온체인", "/온체인고래"]
 
+def parse_collect_request(text: str) -> str:
+    """'/수집', '/수집 온|오프|현황' -> '' | 'on' | 'off' | 'stats'. None otherwise."""
+    text = text.strip()
+    if text in ["/수집", "/collect", "/데이터수집"]:
+        return ""
+    for prefix in ["/수집 ", "/collect ", "/데이터수집 "]:
+        if text.startswith(prefix):
+            arg = text[len(prefix):].strip().lower()
+            if arg in ["온", "on", "켜기"]:
+                return "on"
+            if arg in ["오프", "off", "끄기"]:
+                return "off"
+            if arg in ["현황", "stats", "통계"]:
+                return "stats"
+            return ""
+    return None
+
 
 def parse_gemini_request(text: str) -> str:
     text = text.strip()
@@ -2064,6 +2081,35 @@ def main():
                     print(f"⚠️ Unauthorized access attempt from chat_id: {chat_id}. Request ignored. (To allow, add this chat_id to TELEGRAM_CHAT_ID in .env)")
                     continue
                     
+                # Usage telemetry: anonymized command logging (consent-based, no-op if OFF)
+                if text.startswith("/"):
+                    try:
+                        from usage_collector import log_event
+                        log_event("telegram_command", {"cmd": text.split()[0][:30]})
+                    except Exception:
+                        pass
+
+                # 0.1. Parse Data Collection Consent Request
+                collect_arg = parse_collect_request(text)
+                if collect_arg is not None:
+                    try:
+                        from usage_collector import (set_collection_consent, consent_status_text,
+                                                     fetch_collection_stats)
+                        if collect_arg == "on":
+                            set_collection_consent(True)
+                            reply_to_telegram(chat_id, "🟢 <b>데이터 수집에 동의했습니다.</b> 익명화된 사용 이벤트만 전송됩니다. (<code>/수집 오프</code>로 언제든 중단)", message_id)
+                        elif collect_arg == "off":
+                            set_collection_consent(False)
+                            reply_to_telegram(chat_id, "⚪ <b>데이터 수집을 중단했습니다.</b>", message_id)
+                        elif collect_arg == "stats":
+                            reply_to_telegram(chat_id, fetch_collection_stats(), message_id)
+                        else:
+                            reply_to_telegram(chat_id, consent_status_text(), message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error executing collect command: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 수집 설정 처리 중 오류: {escape_html(str(e))}", message_id)
+                    continue
+
                 # 0. Parse Features Guide Request
                 if parse_features_request(text):
                     print(f"ℹ️ Received features guide request from chat {chat_id}")
