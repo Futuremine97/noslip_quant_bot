@@ -91,22 +91,24 @@ class MultiResolutionRuntime:
         else:
             final_action = "HOLD"
 
-        # ALWAYS calculate target price from low_timing (minimum predicted price)
-# regardless of final_action - we always want to know the lowest point
-target_ts = None
-target_price = None
-ts_pairs, price_pairs = [], []
-for rule in SETTINGS.cadence_rules:
-    w = SETTINGS.cadence_weights.get(rule, 0.0)
-    # Use low_timing for minimum predicted price (best buy opportunity)
-    ts_pairs.append((per_rule[rule]["low_timing"]["predicted_timestamp"], w))
-    price_pairs.append((per_rule[rule]["low_timing"]["predicted_price"], w))
+        # Always expose the weighted low forecast as the next buy opportunity.
+        target_ts = None
+        target_price = None
+        ts_pairs, price_pairs = [], []
+        for rule in SETTINGS.cadence_rules:
+            w = SETTINGS.cadence_weights.get(rule, 0.0)
+            ts_pairs.append(
+                (per_rule[rule]["low_timing"]["predicted_timestamp"], w)
+            )
+            price_pairs.append(
+                (per_rule[rule]["low_timing"]["predicted_price"], w)
+            )
 
-if ts_pairs:
-    target_ts = weighted_timestamp(ts_pairs)
-if price_pairs:
-    total_w = sum(w for _, w in price_pairs) or 1.0
-    target_price = sum(p * w for p, w in price_pairs) / total_w
+        if ts_pairs:
+            target_ts = weighted_timestamp(ts_pairs)
+        if price_pairs:
+            total_w = sum(w for _, w in price_pairs) or 1.0
+            target_price = sum(p * w for p, w in price_pairs) / total_w
 
         return {
             "final_action": final_action,

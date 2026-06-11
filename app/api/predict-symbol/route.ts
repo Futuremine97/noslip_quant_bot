@@ -1,6 +1,16 @@
 import { predictSymbol } from '@/app/actions/prediction';
+import {
+  ApiAuthenticationError,
+  resolveRequestIdentity,
+  type RequestIdentity,
+} from '@/app/api/_lib/auth';
 import { guardApiRequest, secureJson } from '@/app/api/_lib/security';
-import { deductUserCredits, getUserCredits } from '@/app/actions/mockDb';
+import { grantCredits } from '@/server/credits';
+import {
+  InsufficientCreditsError,
+  requireCredits,
+} from '@/server/featureGate';
+import type { CreditTransaction } from '@/server/creditLedger';
 
 export async function POST(request: Request) {
   const guard = guardApiRequest(request, {
@@ -17,9 +27,12 @@ export async function POST(request: Request) {
     return guard;
   }
 
-  try {
-    const { symbol } = await request.json();
+  let identity: RequestIdentity | null = null;
+  let debitTransaction: CreditTransaction | null = null;
 
+  try {
+    const body = await request.json();
+    const { symbol } = body;
     if (!symbol) {
       return secureJson(
         { error: 'Missing required symbol' },
@@ -27,41 +40,66 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check credits before executing calculation
-    const currentCredits = await getUserCredits('default-saas-user');
-    if (currentCredits < 10) {
-      return secureJson(
-        { error: 'Insufficient credits. 10 credits required.' },
-        { status: 402 } // Payment Required
-      );
-    }
-
-    // Deduct 10 credits
-    const success = await deductUserCredits('default-saas-user', 10);
-    if (!success) {
-      return secureJson(
-        { error: 'Insufficient credits. 10 credits required.' },
-        { status: 402 }
-      );
-    }
+    identity = resolveRequestIdentity(request, {
+      requestedUserId: body.userId,
+    });
+    const debit = await requireCredits({
+      userId: identity.userId,
+      walletAddress: identity.walletAddress,
+      feature: 'zero_shot_forecast',
+      metadata: {
+        symbol,
+        source: identity.source,
+      },
+    });
+    debitTransaction = debit.transaction;
 
     const result = await predictSymbol(symbol);
 
     if (!result) {
+      throw new Error('Prediction failed');
+    }
+
+    return secureJson({ ...result, remainingCredits: debit.balance });
+  } catch (error) {
+    if (error instanceof InsufficientCreditsError) {
       return secureJson(
-        { error: 'Prediction failed' },
-        { status: 500 }
+        {
+          ok: false,
+          error: error.code,
+          required: error.required,
+          balance: error.balance,
+        },
+        { status: 402 }
       );
     }
 
-    const remainingCredits = await getUserCredits('default-saas-user');
-    return secureJson({ ...result, remainingCredits });
-  } catch (error) {
+    if (identity && debitTransaction) {
+      try {
+        await grantCredits({
+          userId: identity.userId,
+          walletAddress: identity.walletAddress,
+          amount: Math.abs(debitTransaction.amount),
+          reason: 'feature_refund:zero_shot_forecast',
+          metadata: {
+            debitTransactionId: debitTransaction.id,
+          },
+          idempotencyKey: `refund:${debitTransaction.id}`,
+        });
+      } catch (refundError) {
+        console.error('[Predict-Symbol] Credit refund failed:', refundError);
+      }
+    }
+
     console.error('[Predict-Symbol] Error:', error);
     return secureJson(
-      { error: 'Internal error' },
-      { status: 500 }
+      {
+        error:
+          error instanceof ApiAuthenticationError
+            ? error.message
+            : 'Internal error',
+      },
+      { status: error instanceof ApiAuthenticationError ? 401 : 500 }
     );
   }
 }
-

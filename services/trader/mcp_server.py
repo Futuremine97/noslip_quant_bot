@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 
 import json
+import os
 import traceback
 from pathlib import Path
 
@@ -22,6 +23,219 @@ if str(TRADER_DIR) not in sys.path:
 import machine_auth
 
 
+WEB3_TOOL_DEFINITIONS = [
+    {
+        "name": "get_credit_balance",
+        "description": (
+            "Read a NoSlip user's off-chain credit balance and recent audited "
+            "ledger entries. This does not access a wallet private key."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "NoSlip user identifier. Defaults to 'default'.",
+                }
+            },
+        },
+    },
+    {
+        "name": "estimate_feature_cost",
+        "description": (
+            "Return the server-defined NoSlip Credit cost for a premium feature. "
+            "This is read-only and does not debit credits."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "feature": {
+                    "type": "string",
+                    "enum": [
+                        "personal_forecast",
+                        "zero_shot_forecast",
+                        "premium_whale_report",
+                        "premium_signal_feed",
+                        "strategy_tournament",
+                        "api_usage",
+                    ],
+                }
+            },
+            "required": ["feature"],
+        },
+    },
+    {
+        "name": "create_credit_payment_intent",
+        "description": (
+            "Prepare a testnet-first USDC credit purchase intent. The tool does "
+            "not send a blockchain transaction; the user must sign from their wallet."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "package_id": {
+                    "type": "string",
+                    "enum": ["starter", "research", "team"],
+                },
+                "wallet_address": {
+                    "type": "string",
+                    "description": "Optional public EVM address. Never provide a private key.",
+                },
+            },
+            "required": ["user_id"],
+        },
+    },
+    {
+        "name": "confirm_credit_payment",
+        "description": (
+            "Ask the NoSlip backend to confirm an existing payment intent. In "
+            "local mock mode no chain transaction is sent; production verification "
+            "must validate a user-signed Base transaction."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "intent_id": {"type": "string"},
+                "tx_hash": {
+                    "type": "string",
+                    "description": "Optional public transaction hash.",
+                },
+            },
+            "required": ["user_id", "intent_id"],
+        },
+    },
+    {
+        "name": "check_premium_access",
+        "description": (
+            "Check whether a NoSlip user has enough credits for a premium "
+            "feature. This is read-only and does not consume credits."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "feature": {
+                    "type": "string",
+                    "enum": [
+                        "personal_forecast",
+                        "zero_shot_forecast",
+                        "premium_whale_report",
+                        "premium_signal_feed",
+                        "strategy_tournament",
+                        "api_usage",
+                    ],
+                },
+            },
+            "required": ["user_id", "feature"],
+        },
+    },
+]
+
+BROKER_TOOL_DEFINITIONS = [
+    {
+        "name": "get_broker_status",
+        "description": (
+            "Inspect the local Yuanta or Toss Securities integration mode and "
+            "configuration readiness. Read-only; never returns credentials."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": ["toss", "yuanta"],
+                    "description": "Omit to inspect both configured providers.",
+                }
+            },
+        },
+    },
+    {
+        "name": "get_broker_prices",
+        "description": (
+            "Read stock prices through a configured securities API. Toss uses "
+            "its official REST Open API. Yuanta uses the token-protected local "
+            "Windows COM bridge. This tool never places an order."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": ["toss", "yuanta"],
+                },
+                "symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 20,
+                },
+            },
+            "required": ["provider", "symbols"],
+        },
+    },
+    {
+        "name": "get_broker_holdings",
+        "description": (
+            "Read holdings from a locally configured securities account. "
+            "Credentials remain in environment variables on the service host "
+            "and are never returned. This tool never places an order."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": ["toss", "yuanta"],
+                }
+            },
+            "required": ["provider"],
+        },
+    },
+    {
+        "name": "prepare_broker_order",
+        "description": (
+            "Validate and preview a Yuanta or Toss Securities stock order. "
+            "Preview only: this MCP tool cannot submit, modify, or cancel orders."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": ["toss", "yuanta"],
+                },
+                "symbol": {"type": "string"},
+                "side": {"type": "string", "enum": ["BUY", "SELL"]},
+                "order_type": {
+                    "type": "string",
+                    "enum": ["LIMIT", "MARKET"],
+                },
+                "quantity": {
+                    "type": ["string", "integer"],
+                    "description": "Whole-share quantity. Do not combine with order_amount.",
+                },
+                "price": {
+                    "type": ["string", "number"],
+                    "description": "Required for LIMIT and forbidden for MARKET.",
+                },
+                "order_amount": {
+                    "type": ["string", "number"],
+                    "description": "Toss US MARKET amount order only.",
+                },
+                "time_in_force": {
+                    "type": "string",
+                    "enum": ["DAY", "CLS"],
+                    "default": "DAY",
+                },
+            },
+            "required": ["provider", "symbol", "side", "order_type"],
+        },
+    },
+]
+
+
 def get_analysis_tool_with_graph(symbol: str) -> tuple[str, str | None]:
     from telegram_interactive_bot import execute_analysis_with_graph, normalize_symbol
     normalized = normalize_symbol(symbol)
@@ -30,6 +244,12 @@ def get_analysis_tool_with_graph(symbol: str) -> tuple[str, str | None]:
 def get_tournament_tool() -> str:
     from bot_competition_tournament import run_tournament
     return run_tournament()
+
+def consume_feature_credits(arguments: dict, feature: str) -> dict:
+    import web3_client
+
+    user_id = str(arguments.get("user_id", "default")).strip() or "default"
+    return web3_client.consume_premium_access(user_id, feature)
 
 def send_response(response):
     sys.stdout.write(json.dumps(response) + "\n")
@@ -96,10 +316,15 @@ def main():
                           },
                           {
                             "name": "run_league_tournament",
-                            "description": "Run the daily AI & Quant bot tournament: a backtest league that pits the project's top open-source trading strategies against each other and ranks them by performance.\n\nUse this when the user wants to compare strategies, see which bot is currently winning, or refresh today's leaderboard standings. No input is required.\n\nReturns a ranked, human-readable summary of each strategy's backtest results (returns and relative standing). Read-only and may take longer than other tools because it runs simulations.",
+                            "description": "Run the daily AI & Quant bot tournament after consuming the server-defined NoSlip Credit cost. The backtest league pits the project's top open-source trading strategies against each other and ranks them by performance.\n\nUse this when the user wants to compare strategies, see which bot is currently winning, or refresh today's leaderboard standings.\n\nReturns a ranked, human-readable summary of each strategy's backtest results (returns and relative standing). It may take longer than other tools because it runs simulations.",
                             "inputSchema": {
                               "type": "object",
-                              "properties": {}
+                              "properties": {
+                                "user_id": {
+                                  "type": "string",
+                                  "description": "NoSlip credit account to debit. Defaults to 'default'."
+                                }
+                              }
                             }
                           },
                           {
@@ -289,6 +514,10 @@ def main():
                                 "limit": {
                                   "type": "number",
                                   "description": "Max signals to return (1-100, default 20)."
+                                },
+                                "user_id": {
+                                  "type": "string",
+                                  "description": "NoSlip credit account to debit. Defaults to 'default'."
                                 }
                               }
                             }
@@ -311,6 +540,10 @@ def main():
                                 "days": {
                                   "type": "number",
                                   "description": "Forecast horizon in periods/days (default 30)."
+                                },
+                                "user_id": {
+                                  "type": "string",
+                                  "description": "NoSlip credit account to debit. Defaults to 'default'."
                                 }
                               },
                               "required": ["csv_path"]
@@ -364,7 +597,9 @@ def main():
                               },
                               "required": ["user_id", "name"]
                             }
-                          }
+                          },
+                          *WEB3_TOOL_DEFINITIONS,
+                          *BROKER_TOOL_DEFINITIONS
                         ]
                     }
                 }
@@ -394,6 +629,7 @@ def main():
                         })
                     
                 elif tool_name == "run_league_tournament":
+                    consume_feature_credits(arguments, "strategy_tournament")
                     result_text = get_tournament_tool()
                     
                 elif tool_name == "configure_personal_ontology":
@@ -500,6 +736,7 @@ def main():
                                                      arguments.get("thesis", ""))
 
                 elif tool_name == "view_signal_feed":
+                    consume_feature_credits(arguments, "premium_signal_feed")
                     from peer_hub_client import view_signal_feed
                     result_text = view_signal_feed(arguments.get("symbol", "") or "",
                                                    int(arguments.get("limit", 20)))
@@ -513,6 +750,7 @@ def main():
                         csv_path = arguments.get("csv_path")
                         if not csv_path:
                             raise ValueError("Missing csv_path argument")
+                        consume_feature_credits(arguments, "zero_shot_forecast")
                         r = pfs.zero_shot_forecast(csv_path=csv_path,
                                                    domain=arguments.get("domain", "generic"),
                                                    days=int(arguments.get("days", 30)))
@@ -523,6 +761,7 @@ def main():
                         csv_path = arguments.get("csv_path")
                         if not (user_id and name and csv_path):
                             raise ValueError("Missing user_id/name/csv_path argument")
+                        consume_feature_credits(arguments, "personal_forecast")
                         pfs.register_dataset(user_id, name, csv_path=csv_path,
                                              domain=arguments.get("domain", "generic"))
                         meta = pfs.train_personal_model(user_id, name)
@@ -532,6 +771,7 @@ def main():
                         user_id = arguments.get("user_id"); name = arguments.get("name")
                         if not (user_id and name):
                             raise ValueError("Missing user_id/name argument")
+                        consume_feature_credits(arguments, "personal_forecast")
                         r = pfs.personal_forecast(user_id, name,
                                                   days=int(arguments.get("days", 30)))
                         chart_path = r.pop("chart", None)
@@ -542,6 +782,89 @@ def main():
                         with open(chart_path, "rb") as f:
                             result_text.append({"type": "image", "mimeType": "image/png",
                                                 "data": _b64.b64encode(f.read()).decode()})
+
+                elif tool_name in (
+                    "get_credit_balance",
+                    "estimate_feature_cost",
+                    "create_credit_payment_intent",
+                    "confirm_credit_payment",
+                    "check_premium_access",
+                ):
+                    import web3_client
+
+                    user_id = arguments.get("user_id", "default")
+                    if tool_name == "get_credit_balance":
+                        payload = web3_client.get_credit_balance(user_id)
+                    elif tool_name == "estimate_feature_cost":
+                        feature = arguments.get("feature")
+                        if not feature:
+                            raise ValueError("Missing feature argument")
+                        payload = web3_client.estimate_feature_cost(feature)
+                    elif tool_name == "create_credit_payment_intent":
+                        payload = web3_client.create_credit_payment_intent(
+                            user_id=user_id,
+                            package_id=arguments.get("package_id", "starter"),
+                            wallet_address=arguments.get("wallet_address", ""),
+                        )
+                    elif tool_name == "confirm_credit_payment":
+                        intent_id = arguments.get("intent_id")
+                        if not intent_id:
+                            raise ValueError("Missing intent_id argument")
+                        payload = web3_client.confirm_credit_payment(
+                            user_id=user_id,
+                            intent_id=intent_id,
+                            tx_hash=arguments.get("tx_hash", ""),
+                        )
+                    else:
+                        feature = arguments.get("feature")
+                        if not feature:
+                            raise ValueError("Missing feature argument")
+                        payload = web3_client.check_premium_access(
+                            user_id, feature
+                        )
+                    result_text = json.dumps(payload, indent=2, ensure_ascii=False)
+
+                elif tool_name in (
+                    "get_broker_status",
+                    "get_broker_prices",
+                    "get_broker_holdings",
+                    "prepare_broker_order",
+                ):
+                    from brokers.service import (
+                        broker_status,
+                        get_broker,
+                        prepare_broker_order,
+                    )
+
+                    provider = arguments.get("provider", "")
+                    if tool_name == "get_broker_status":
+                        payload = broker_status(provider)
+                    elif tool_name == "get_broker_prices":
+                        symbols = arguments.get("symbols")
+                        if not provider or not isinstance(symbols, list):
+                            raise ValueError("provider and symbols are required")
+                        payload = get_broker(provider).get_prices(symbols)
+                    elif tool_name == "get_broker_holdings":
+                        if not provider:
+                            raise ValueError("provider is required")
+                        payload = get_broker(provider).get_holdings()
+                    else:
+                        required = ("provider", "symbol", "side", "order_type")
+                        if any(not arguments.get(key) for key in required):
+                            raise ValueError(
+                                "provider, symbol, side, and order_type are required"
+                            )
+                        payload = prepare_broker_order(
+                            provider=provider,
+                            symbol=arguments["symbol"],
+                            side=arguments["side"],
+                            order_type=arguments["order_type"],
+                            quantity=arguments.get("quantity"),
+                            price=arguments.get("price"),
+                            order_amount=arguments.get("order_amount"),
+                            time_in_force=arguments.get("time_in_force", "DAY"),
+                        )
+                    result_text = json.dumps(payload, indent=2, ensure_ascii=False)
 
                 else:
                     raise ValueError(f"Unknown tool: {tool_name}")
@@ -580,7 +903,14 @@ def main():
                     
         except Exception as e:
             try:
-                err_msg = str(e) + "\n" + traceback.format_exc()
+                err_msg = str(e)
+                if os.getenv("NOSLIP_MCP_DEBUG_ERRORS", "").strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }:
+                    err_msg += "\n" + traceback.format_exc()
                 res = {
                     "jsonrpc": "2.0",
                     "id": req_id if 'req_id' in locals() else None,

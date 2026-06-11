@@ -333,6 +333,128 @@ def parse_collect_request(text: str) -> str:
     return None
 
 
+def parse_web3_request(text: str) -> tuple[str | None, str]:
+    normalized = text.strip()
+    command, _, argument = normalized.partition(" ")
+    command_map = {
+        "/credits": "credits",
+        "/premium": "premium",
+        "/wallet": "wallet",
+        "/pay": "pay",
+    }
+    return command_map.get(command.lower()), argument.strip()
+
+
+def parse_broker_request(text: str) -> tuple[str | None, str]:
+    normalized = text.strip()
+    command, _, argument = normalized.partition(" ")
+    command_map = {
+        "/broker": "status",
+        "/증권": "status",
+        "/quote": "prices",
+        "/시세": "prices",
+        "/holdings": "holdings",
+        "/잔고": "holdings",
+    }
+    return command_map.get(command.lower()), argument.strip()
+
+
+def execute_broker_command(command: str, argument: str = "") -> str:
+    from brokers.service import broker_status, get_broker
+
+    if command == "status":
+        payload = broker_status(argument)
+        return (
+            "<b>NoSlip Securities API Status</b>\n"
+            f"<pre>{escape_html(json.dumps(payload, ensure_ascii=False, indent=2))}</pre>\n"
+            "Credentials are read only from the local service environment."
+        )
+
+    parts = [part for part in re.split(r"[\s,]+", argument.strip()) if part]
+    if not parts:
+        raise ValueError("Provider is required: toss or yuanta")
+    provider = parts[0]
+    broker = get_broker(provider)
+
+    if command == "prices":
+        if len(parts) < 2:
+            raise ValueError("Usage: /quote toss 005930 AAPL")
+        payload = broker.get_prices(parts[1:])
+        rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+        return (
+            f"<b>{escape_html(provider)} prices</b>\n"
+            f"<pre>{escape_html(rendered[:3200])}</pre>\n"
+            "Read-only quote request. No order was placed."
+        )
+
+    payload = broker.get_holdings()
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+    return (
+        f"<b>{escape_html(provider)} holdings</b>\n"
+        f"<pre>{escape_html(rendered[:3200])}</pre>\n"
+        "Do not send account passwords, certificates, or API secrets through Telegram."
+    )
+
+
+def execute_web3_command(chat_id: str, command: str, argument: str = "") -> str:
+    import web3_client
+
+    user_id = f"telegram:{chat_id}"
+    dashboard_url = (
+        os.getenv("NOSLIP_DASHBOARD_URL", "").strip()
+        or os.getenv("NOSLIP_WEB_APP_URL", "").strip()
+        or "http://localhost:3000"
+    )
+
+    if command == "credits":
+        payload = web3_client.get_credit_balance(user_id)
+        account = payload.get("account", {})
+        return (
+            "NoSlip Credits\n"
+            f"Balance: <b>{account.get('balance', 0)}</b>\n"
+            f"Account: <code>{escape_html(account.get('userId', user_id))}</code>\n\n"
+            "Credits are off-chain product usage units, not an investment asset."
+        )
+
+    if command == "premium":
+        costs = []
+        labels = [
+            ("personal_forecast", "Personal forecast"),
+            ("premium_whale_report", "Premium whale report"),
+            ("premium_signal_feed", "Signal feed"),
+            ("strategy_tournament", "Strategy tournament"),
+        ]
+        for feature, label in labels:
+            cost = web3_client.estimate_feature_cost(feature).get("cost", "?")
+            costs.append(f"• {label}: <b>{cost}</b> credits")
+        return (
+            "NoSlip Premium Features\n"
+            + "\n".join(costs)
+            + "\n\nNot financial or investment advice. No guaranteed performance."
+        )
+
+    if command == "wallet":
+        payload = web3_client.get_credit_balance(user_id)
+        wallet = payload.get("account", {}).get("walletAddress")
+        if wallet:
+            return f"Linked public wallet: <code>{escape_html(wallet)}</code>"
+        return (
+            "No wallet is linked to this Telegram credit account.\n"
+            f"Open the dashboard to connect a wallet: {escape_html(dashboard_url)}\n\n"
+            "Never send a seed phrase or private key through Telegram."
+        )
+
+    if command == "pay":
+        return (
+            "Create and sign credit payments in the NoSlip dashboard:\n"
+            f"{escape_html(dashboard_url)}\n\n"
+            "The bot only prepares payment access. It never requests a seed phrase, "
+            "private key, or exchange API key."
+        )
+
+    raise ValueError(f"Unknown Web3 command: {command}")
+
+
 def parse_gemini_request(text: str) -> str:
     text = text.strip()
     for prefix in ["/gemini ", "/제미나이 ", "/gemini", "/제미나이"]:
@@ -880,6 +1002,8 @@ def execute_features_summary() -> str:
         "ℹ️ <b>[No Slip AI Quant Bot] 사용 가이드 & 주요 기능</b>",
         "=" * 40,
         "No Slip 봇은 6인의 AI 퀀트 포럼 분석 및 실시간 토론 기능을 지원합니다.",
+        "Web3: <code>/credits</code> | <code>/premium</code> | <code>/wallet</code> | <code>/pay</code>",
+        "증권 API: <code>/broker [toss|yuanta]</code> | <code>/quote [provider] [symbols]</code> | <code>/holdings [provider]</code>",
         "",
         "📊 <b>1. 실시간 주식/크립토 분석</b>",
         "• <b>설명</b>: yfinance 데이터 및 매크로 지표를 기반으로 6인의 AI 에이전트(추세, 가치, 수급, 매크로 등)가 포지션을 산출하여 합의 스탠스 리포트를 제공합니다.",
@@ -2117,6 +2241,44 @@ def main():
                     reply_to_telegram(chat_id, features_report, message_id)
                     continue
 
+                # 0.2. Parse optional Web3 / credit commands
+                web3_command, web3_argument = parse_web3_request(text)
+                if web3_command:
+                    try:
+                        reply_to_telegram(
+                            chat_id,
+                            execute_web3_command(
+                                str(chat_id), web3_command, web3_argument
+                            ),
+                            message_id,
+                        )
+                    except Exception as e:
+                        print(f"Error executing Web3 command: {e}")
+                        reply_to_telegram(
+                            chat_id,
+                            f"Web3 credit service error: {escape_html(str(e))}",
+                            message_id,
+                        )
+                    continue
+
+                # 0.25. Parse optional securities broker commands
+                broker_command, broker_argument = parse_broker_request(text)
+                if broker_command:
+                    try:
+                        reply_to_telegram(
+                            chat_id,
+                            execute_broker_command(broker_command, broker_argument),
+                            message_id,
+                        )
+                    except Exception as e:
+                        print(f"Error executing broker command: {e}")
+                        reply_to_telegram(
+                            chat_id,
+                            f"Broker service error: {escape_html(str(e))}",
+                            message_id,
+                        )
+                    continue
+
                 # 0.3. Parse Card News Request
                 if parse_cardnews_request(text):
                     print(f"🗞️ Received card news request from chat {chat_id}")
@@ -2132,8 +2294,12 @@ def main():
                 # 0.4. Parse On-chain Whale Report Request
                 if parse_onchain_request(text):
                     print(f"🐋 Received on-chain whale report request from chat {chat_id}")
-                    reply_to_telegram(chat_id, "⏳ <b>BTC/ETH 온체인 고래 트랜잭션을 스캔 중입니다. 약 10~20초 소요됩니다...</b>", message_id)
                     try:
+                        import web3_client
+                        web3_client.consume_premium_access(
+                            f"telegram:{chat_id}", "premium_whale_report"
+                        )
+                        reply_to_telegram(chat_id, "⏳ <b>BTC/ETH 온체인 고래 트랜잭션을 스캔 중입니다. 약 10~20초 소요됩니다...</b>", message_id)
                         from whale_onchain_monitor import generate_onchain_report
                         report = generate_onchain_report(html=True)
                         reply_to_telegram(chat_id, report, message_id)
@@ -2163,8 +2329,12 @@ def main():
                 # 0.7. Parse Bot Competition Request
                 if parse_competition_request(text):
                     print(f"🏆 Received bot competition request from chat {chat_id}")
-                    reply_to_telegram(chat_id, "⏳ <b>글로벌 AI 퀀트 봇 백테스트 토너먼트를 시뮬레이션 중입니다. 약 5~10초 소요됩니다...</b>", message_id)
                     try:
+                        import web3_client
+                        web3_client.consume_premium_access(
+                            f"telegram:{chat_id}", "strategy_tournament"
+                        )
+                        reply_to_telegram(chat_id, "⏳ <b>글로벌 AI 퀀트 봇 백테스트 토너먼트를 시뮬레이션 중입니다. 약 5~10초 소요됩니다...</b>", message_id)
                         from bot_competition_tournament import run_tournament
                         report = run_tournament()
                         reply_to_telegram(chat_id, report, message_id)

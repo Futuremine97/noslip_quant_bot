@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Web3StatusCard } from "./components/Web3StatusCard";
 import { searchTokens, type TokenSearchResult } from "./actions/tokens";
 import { searchSp500Equities, type EquitySearchResult } from "./actions/equities";
 import { getJupiterQuote } from "./actions/jupiter";
@@ -2272,11 +2273,14 @@ export default function Page() {
   const handleTossPayment = async (type: "plan" | "credits", value: string | number, amountKrw: number) => {
     setIsChargingCredits(true);
     try {
-      const clientKey = process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY || "test_ck_Ba5PzR0ArnBjgwDN611orvmYnNeD";
+      const clientKey = process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY;
+      if (!clientKey) {
+        throw new Error("NEXT_PUBLIC_TOSS_CLIENT_KEY is not configured");
+      }
       const { loadTossPayments } = await import("@tosspayments/payment-sdk");
       const tossPayments = await loadTossPayments(clientKey);
 
-      const userId = "default-saas-user";
+      const userId = userProfile?.userId || "local:browser";
       const orderId = `user__${userId}__${type}__${value}__${Date.now()}`;
       const orderName = type === "plan" ? `${value} Plan Subscription` : `Prophet ${value} Credits Top-up`;
 
@@ -2295,7 +2299,7 @@ export default function Page() {
     }
   };
 
-  const handleSimulatePayment = async (type: string, details: any) => {
+  const handleSelectBasicPlan = async () => {
     setIsChargingCredits(true);
     try {
       const res = await fetch("/api/billing/webhook", {
@@ -2304,9 +2308,9 @@ export default function Page() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          type,
-          ...details,
-          userId: 'default-saas-user'
+          type: "plan.selected",
+          plan: "basic",
+          userId: userProfile?.userId || "local:browser"
         }),
       });
       if (res.ok) {
@@ -4858,7 +4862,7 @@ export default function Page() {
               <span className={`plan-badge ${userProfile.plan}`}>
                 {userProfile.plan} plan
               </span>
-              <span>Credits: <strong className="credits-amount">{userProfile.credits}</strong></span>
+              <span>NoSlip Credits: <strong className="credits-amount">{userProfile.credits}</strong></span>
               <button 
                 onClick={fetchUserProfile} 
                 className="saas-refresh-btn" 
@@ -4887,6 +4891,10 @@ export default function Page() {
           </button>
         </div>
       </header>
+
+      <div className="web3-status-wrap">
+        <Web3StatusCard />
+      </div>
 
       <section className={`hero-panel ${marketMode === "sp500" ? "hero-panel-stock" : ""}`}>
         {marketMode === "sp500" ? (
@@ -8235,13 +8243,13 @@ export default function Page() {
               <ul className="price-features-list">
                 <li>Daily general S&amp;P500 market maps</li>
                 <li>Static portfolio diversification analysis</li>
-                <li>Initial 100 Prophet credits included</li>
+                <li>Starts at 0 credits; local development grants are available</li>
               </ul>
               <button 
                 type="button" 
                 className="price-action-btn"
                 disabled={userProfile?.plan === 'basic' || isChargingCredits}
-                onClick={() => handleSimulatePayment('plan.subscribed', { plan: 'basic' })}
+                onClick={handleSelectBasicPlan}
               >
                 {userProfile?.plan === 'basic' ? 'Current Plan' : 'Select Basic'}
               </button>

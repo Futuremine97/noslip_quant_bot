@@ -1,23 +1,65 @@
+import { createHash } from "node:crypto";
+
 import { NextResponse } from 'next/server';
 import { addUserCredits, updateUserPlan } from '@/app/actions/mockDb';
+import { guardApiRequest } from '@/app/api/_lib/security';
+import { resolveTossPurchase } from '@/server/billingCatalog';
+
+type TossConfirmation = {
+  orderId?: string;
+  paymentKey?: string;
+  status?: string;
+  totalAmount?: number;
+  code?: string;
+  message?: string;
+};
+
+function paymentRedirect(
+  request: Request,
+  state: "success" | "fail",
+  params: Record<string, string>
+) {
+  const url = new URL("/", request.url);
+  url.searchParams.set("payment", state);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+  return NextResponse.redirect(url);
+}
 
 export async function GET(request: Request) {
+  const guard = guardApiRequest(request, {
+    routeKey: "toss-payment-success",
+    maxBodyBytes: 0,
+    rateLimit: {
+      key: "toss-payment-success",
+      limit: 30,
+      windowMs: 60_000,
+    },
+  });
+  if (guard) {
+    return guard;
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const paymentKey = searchParams.get('paymentKey');
     const orderId = searchParams.get('orderId');
-    const amount = searchParams.get('amount');
+    const amountRaw = searchParams.get('amount');
 
-    console.log('[Toss Success Callback] Query parameters:', { paymentKey, orderId, amount });
-
-    if (!paymentKey || !orderId || !amount) {
-      return NextResponse.redirect(
-        new URL('/?payment=fail&code=INVALID_PARAMS&message=Missing+required+payment+parameters', request.url)
-      );
+    if (!paymentKey || !orderId || !amountRaw) {
+      return paymentRedirect(request, "fail", {
+        code: "INVALID_PARAMS",
+        message: "Missing required payment parameters",
+      });
     }
 
-    // 1. Confirm the payment with Toss Payments API
-    const secretKey = process.env.TOSS_SECRET_KEY || '';
+    const amount = Number(amountRaw);
+    const purchase = resolveTossPurchase(orderId, amount);
+    const secretKey = String(process.env.TOSS_SECRET_KEY || '').trim();
+    if (!secretKey) {
+      throw new Error("Toss Payments is not configured");
+    }
     const basicAuth = Buffer.from(`${secretKey}:`).toString('base64');
 
     const confirmResponse = await fetch('https://api.tosspayments.com/v1/payments/confirm', {
@@ -26,56 +68,82 @@ export async function GET(request: Request) {
         Authorization: `Basic ${basicAuth}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ paymentKey, orderId, amount: Number(amount) }),
+      body: JSON.stringify({ paymentKey, orderId, amount }),
+      cache: "no-store",
     });
 
-    const responseBody = await confirmResponse.json();
+    const responseBody = await confirmResponse.json() as TossConfirmation;
 
     if (!confirmResponse.ok) {
-      console.error('[Toss Success Callback] Confirmation failed:', responseBody);
-      const errMsg = responseBody.message || 'Payment confirmation failed';
-      return NextResponse.redirect(
-        new URL(`/?payment=fail&code=CONFIRM_FAILED&message=${encodeURIComponent(errMsg)}`, request.url)
-      );
+      console.error('[Toss Success Callback] Confirmation failed:', {
+        status: confirmResponse.status,
+        code: responseBody.code,
+      });
+      return paymentRedirect(request, "fail", {
+        code: "CONFIRM_FAILED",
+        message: responseBody.message || "Payment confirmation failed",
+      });
     }
 
-    console.log('[Toss Success Callback] Confirmation success:', responseBody);
-
-    // 2. Parse the custom orderId to extract purchase details
-    // Format: user__[userId]__[type]__[value]__[timestamp]
-    const parts = orderId.split('__');
-    if (parts.length < 4 || parts[0] !== 'user') {
-      console.error('[Toss Success Callback] Invalid orderId format:', orderId);
-      return NextResponse.redirect(
-        new URL('/?payment=fail&code=INVALID_ORDER_ID&message=Invalid+order+format', request.url)
-      );
+    if (
+      responseBody.orderId !== orderId ||
+      responseBody.paymentKey !== paymentKey ||
+      responseBody.status !== "DONE" ||
+      Number(responseBody.totalAmount) !== purchase.amountKrw
+    ) {
+      console.error('[Toss Success Callback] Confirmation mismatch:', {
+        orderMatches: responseBody.orderId === orderId,
+        paymentKeyMatches: responseBody.paymentKey === paymentKey,
+        status: responseBody.status,
+        amountMatches: Number(responseBody.totalAmount) === purchase.amountKrw,
+      });
+      return paymentRedirect(request, "fail", {
+        code: "CONFIRM_MISMATCH",
+        message: "Payment confirmation did not match the requested purchase",
+      });
     }
 
-    const userId = parts[1];
-    const purchaseType = parts[2]; // 'credits' or 'plan'
-    const purchaseValue = parts[3]; // amount of credits (e.g. '500') or plan name (e.g. 'pro')
-
-    let message = '';
-    if (purchaseType === 'plan') {
-      const planName = purchaseValue as 'basic' | 'pro' | 'enterprise';
-      await updateUserPlan(userId, planName);
-      message = `Successfully upgraded to ${planName} plan.`;
-    } else if (purchaseType === 'credits') {
-      const creditsToAdd = Number(purchaseValue);
-      await addUserCredits(userId, creditsToAdd);
-      message = `Successfully charged ${creditsToAdd} credits.`;
+    const paymentKeyHash = createHash("sha256")
+      .update(paymentKey)
+      .digest("hex");
+    const idempotencyKey = `toss-payment:${paymentKeyHash}`;
+    const metadata = {
+      paymentProvider: "toss-payments",
+      paymentKeyHash,
+      orderId,
+      amountKrw: purchase.amountKrw,
+    };
+    if (purchase.type === 'plan') {
+      await updateUserPlan(purchase.userId, purchase.value, {
+        idempotencyKey: `${idempotencyKey}:plan-bonus`,
+        reason: `payment:toss:plan:${purchase.value}`,
+        metadata,
+      });
+    } else {
+      await addUserCredits(purchase.userId, purchase.creditAmount, {
+        idempotencyKey: `${idempotencyKey}:credits`,
+        reason: "payment:toss:credits",
+        metadata,
+      });
     }
 
-    console.log('[Toss Success Callback] Applied database changes:', { userId, purchaseType, purchaseValue });
-
-    // 3. Redirect back to homepage with success flag and details
-    return NextResponse.redirect(
-      new URL(`/?payment=success&type=${purchaseType}&value=${purchaseValue}`, request.url)
+    console.info('[Toss Success Callback] Purchase applied:', {
+      type: purchase.type,
+      value: purchase.value,
+      userId: purchase.userId,
+    });
+    return paymentRedirect(request, "success", {
+      type: purchase.type,
+      value: purchase.value,
+    });
+  } catch (error) {
+    console.error(
+      '[Toss Success Callback] Request failed:',
+      error instanceof Error ? error.message : 'Unknown error'
     );
-  } catch (error: any) {
-    console.error('[Toss Success Callback] Unexpected exception:', error);
-    return NextResponse.redirect(
-      new URL(`/?payment=fail&code=SERVER_ERROR&message=${encodeURIComponent(error.message || 'Internal server error')}`, request.url)
-    );
+    return paymentRedirect(request, "fail", {
+      code: "SERVER_ERROR",
+      message: error instanceof Error ? error.message : "Internal server error",
+    });
   }
 }

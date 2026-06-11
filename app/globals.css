@@ -3103,3 +3103,152 @@ body {
   margin-top: 4px;
 }
 
+.web3-status-wrap {
+  width: min(1480px, calc(100vw - clamp(32px, 5vw, 104px)));
+  margin: 0 auto 28px;
+}
+
+.web3-status-card {
+  color: #f8fafc;
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  border-radius: 22px;
+  padding: 22px;
+  background:
+    radial-gradient(circle at 90% 0%, rgba(59, 130, 246, 0.16), transparent 32%),
+    linear-gradient(145deg, rgba(15, 23, 42, 0.96), rgba(9, 13, 28, 0.96));
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.32);
+}
+
+.web3-status-card.compact {
+  padding: 16px;
+  border-radius: 16px;
+}
+
+.web3-status-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.web3-status-heading h2 {
+  margin: 0;
+  color: #f8fafc;
+  font: 700 1.25rem/1.2 var(--font-display);
+}
+
+.web3-kicker {
+  margin: 0 0 5px;
+  color: #93c5fd;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.web3-credit-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: #c7d2fe;
+}
+
+.web3-credit-balance strong {
+  color: #ffffff;
+  font-size: 1.6rem;
+}
+
+.web3-credit-balance span {
+  font-size: 0.75rem;
+}
+
+.web3-wallet-actions,
+.web3-payment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.web3-wallet-address {
+  color: #bfdbfe;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+.web3-primary-button,
+.web3-secondary-button {
+  border-radius: 12px;
+  padding: 9px 13px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.web3-primary-button {
+  border: 1px solid #818cf8;
+  background: linear-gradient(135deg, #4f46e5, #2563eb);
+  color: #ffffff;
+}
+
+.web3-secondary-button {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+}
+
+.web3-primary-button:disabled,
+.web3-secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.web3-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.web3-feature-grid span {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 10px;
+  padding: 9px;
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.74rem;
+}
+
+.web3-inline-error,
+.web3-status-message,
+.web3-intent-line,
+.web3-disclaimer {
+  margin: 10px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.web3-inline-error {
+  color: #fca5a5;
+}
+
+.web3-status-message {
+  color: #bfdbfe;
+}
+
+.web3-intent-line {
+  color: #a5b4fc;
+  font-family: var(--font-mono);
+}
+
+.web3-disclaimer {
+  color: #94a3b8;
+}
+
+@media (max-width: 760px) {
+  .web3-feature-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

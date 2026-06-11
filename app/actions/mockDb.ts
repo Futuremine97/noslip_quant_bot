@@ -1,5 +1,13 @@
 import fs from 'fs';
 import path from 'path';
+import {
+    InsufficientCreditBalanceError,
+} from '@/server/creditLedger';
+import {
+    debitCredits,
+    getCreditBalance,
+    grantCredits,
+} from '@/server/credits';
 
 const DB_FILE_PATH = path.join(process.cwd(), 'data', 'mock_user_db.json');
 
@@ -8,6 +16,12 @@ interface UserProfile {
     credits: number;
     plan: 'basic' | 'pro' | 'enterprise';
 }
+
+type BillingMutationOptions = {
+    idempotencyKey?: string;
+    reason?: string;
+    metadata?: Record<string, unknown>;
+};
 
 function ensureDbExists() {
     const dir = path.dirname(DB_FILE_PATH);
@@ -18,7 +32,7 @@ function ensureDbExists() {
         const initialData: Record<string, UserProfile> = {
             'default-saas-user': {
                 userId: 'default-saas-user',
-                credits: 100, // 초기 크레딧: 100 토큰
+                credits: 0,
                 plan: 'basic'
             }
         };
@@ -46,18 +60,24 @@ export async function initializeUserIfMissing(userId: string): Promise<UserProfi
     if (!db[userId]) {
         db[userId] = {
             userId,
-            credits: 100,
+            credits: 0,
             plan: 'basic'
         };
         writeDb(db);
     }
-    return db[userId];
+    return {
+        ...db[userId],
+        credits: await getCreditBalance(userId),
+    };
 }
 
 export async function getUserProfile(userId: string = 'default-saas-user'): Promise<UserProfile> {
     await initializeUserIfMissing(userId);
     const db = readDb();
-    return db[userId];
+    return {
+        ...db[userId],
+        credits: await getCreditBalance(userId),
+    };
 }
 
 export async function getUserCredits(userId: string = 'default-saas-user'): Promise<number> {
@@ -66,37 +86,63 @@ export async function getUserCredits(userId: string = 'default-saas-user'): Prom
 }
 
 export async function deductUserCredits(userId: string = 'default-saas-user', amount: number): Promise<boolean> {
-    await initializeUserIfMissing(userId);
-    const db = readDb();
-    const user = db[userId];
-    if (user.credits < amount) {
-        return false; // 크레딧 부족
+    try {
+        await debitCredits({
+            userId,
+            amount,
+            reason: 'legacy_feature_debit',
+        });
+        return true;
+    } catch (error) {
+        if (error instanceof InsufficientCreditBalanceError) {
+            return false;
+        }
+        throw error;
     }
-    user.credits -= amount;
-    writeDb(db);
-    return true;
 }
 
-export async function addUserCredits(userId: string = 'default-saas-user', amount: number): Promise<number> {
-    await initializeUserIfMissing(userId);
-    const db = readDb();
-    const user = db[userId];
-    user.credits += amount;
-    writeDb(db);
-    return user.credits;
+export async function addUserCredits(
+    userId: string = 'default-saas-user',
+    amount: number,
+    options: BillingMutationOptions = {}
+): Promise<number> {
+    const result = await grantCredits({
+        userId,
+        amount,
+        reason: options.reason || 'legacy_billing_credit',
+        metadata: options.metadata,
+        idempotencyKey: options.idempotencyKey,
+    });
+    return result.account.balance;
 }
 
-export async function updateUserPlan(userId: string = 'default-saas-user', plan: 'basic' | 'pro' | 'enterprise'): Promise<UserProfile> {
+export async function updateUserPlan(
+    userId: string = 'default-saas-user',
+    plan: 'basic' | 'pro' | 'enterprise',
+    options: BillingMutationOptions = {}
+): Promise<UserProfile> {
     await initializeUserIfMissing(userId);
     const db = readDb();
     const user = db[userId];
     user.plan = plan;
-    // 플랜 변경에 따른 기본 크레딧 보너스 지급
+    let bonusCredits = 0;
     if (plan === 'pro') {
-        user.credits += 500;
+        bonusCredits = 500;
     } else if (plan === 'enterprise') {
-        user.credits += 2000;
+        bonusCredits = 2000;
     }
     writeDb(db);
-    return user;
+    if (bonusCredits > 0) {
+        await grantCredits({
+            userId,
+            amount: bonusCredits,
+            reason: options.reason || `legacy_plan_bonus:${plan}`,
+            metadata: options.metadata,
+            idempotencyKey: options.idempotencyKey,
+        });
+    }
+    return {
+        ...user,
+        credits: await getCreditBalance(userId),
+    };
 }

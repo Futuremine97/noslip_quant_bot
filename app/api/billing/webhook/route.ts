@@ -1,64 +1,63 @@
-import { secureJson } from '@/app/api/_lib/security';
-import { addUserCredits, updateUserPlan } from '@/app/actions/mockDb';
+import {
+  ApiAuthenticationError,
+  resolveRequestIdentity,
+} from '@/app/api/_lib/auth';
+import { guardApiRequest, secureJson } from '@/app/api/_lib/security';
+import { updateUserPlan } from '@/app/actions/mockDb';
+import { getPaymentMode } from '@/lib/web3/basePayment';
 
 export async function POST(request: Request) {
+  const guard = guardApiRequest(request, {
+    routeKey: "legacy-billing-simulation",
+    maxBodyBytes: 2 * 1024,
+    allowedContentTypes: ["application/json"],
+    rateLimit: {
+      key: "legacy-billing-simulation",
+      limit: 10,
+      windowMs: 60_000,
+    },
+  });
+  if (guard) {
+    return guard;
+  }
+
+  if (process.env.NODE_ENV === "production" || getPaymentMode() !== "mock") {
+    return secureJson(
+      { ok: false, error: "Billing simulation is disabled" },
+      { status: 404 }
+    );
+  }
+
   try {
     const body = await request.json();
-    console.log('[Billing Webhook] Received webhook payload:', body);
-
-    // Support standard Stripe-like checkout.session.completed structure
-    // or Toss Payments structure, or direct test payload.
-    let userId = 'default-saas-user';
-    let type = body.type || body.eventType || 'checkout.session.completed';
-    let creditsToAdd = 0;
-    let planToUpgrade: 'basic' | 'pro' | 'enterprise' | null = null;
-
-    // Direct simulation payload
-    if (body.userId) {
-      userId = body.userId;
+    if (body.type !== "plan.selected" || body.plan !== "basic") {
+      return secureJson(
+        {
+          ok: false,
+          error: "Only local Basic plan selection is supported by this endpoint",
+        },
+        { status: 400 }
+      );
     }
 
-    // Determine payload details
-    if (type === 'checkout.session.completed' || type === 'payment.success') {
-      // Look for custom metadata or simulated params
-      const amountTotal = body.data?.object?.amount_total || body.amount || 10000; // default 10k KRW / $10
-      
-      // If payment is for a plan, map it
-      const plan = body.plan || body.data?.object?.metadata?.plan;
-      if (plan === 'pro' || plan === 'enterprise') {
-        planToUpgrade = plan;
-      } else {
-        // Standard credit purchase: $10 = 1000 credits
-        creditsToAdd = Math.floor(amountTotal / 10); // 1 credit per 10 KRW or cents
-      }
-    } else if (type === 'plan.subscribed') {
-      planToUpgrade = body.plan || 'pro';
-    } else if (type === 'credits.purchased') {
-      creditsToAdd = body.credits || 500;
-    } else {
-      // Generic success fallback
-      creditsToAdd = 1000;
-    }
-
-    let message = '';
-    if (planToUpgrade) {
-      const profile = await updateUserPlan(userId, planToUpgrade);
-      message = `Successfully upgraded user ${userId} to plan: ${planToUpgrade}. Current credits: ${profile.credits}`;
-    } else if (creditsToAdd > 0) {
-      const finalCredits = await addUserCredits(userId, creditsToAdd);
-      message = `Successfully added ${creditsToAdd} credits to user ${userId}. Current credits: ${finalCredits}`;
-    }
+    const identity = resolveRequestIdentity(request, {
+      requestedUserId: body.userId,
+    });
+    const profile = await updateUserPlan(identity.userId, "basic");
 
     return secureJson({
-      success: true,
-      message,
-      receivedEvent: type
+      ok: true,
+      plan: profile.plan,
+      credits: profile.credits,
     });
   } catch (error) {
-    console.error('[Billing Webhook] Error processing webhook:', error);
+    console.error(
+      '[Billing Simulation] Request failed:',
+      error instanceof Error ? error.message : 'Unknown error'
+    );
     return secureJson(
-      { error: 'Failed to process billing webhook' },
-      { status: 500 }
+      { ok: false, error: 'Failed to update the local plan' },
+      { status: error instanceof ApiAuthenticationError ? 401 : 500 }
     );
   }
 }

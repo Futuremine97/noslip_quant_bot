@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
+import { Web3StatusCard } from "@/app/components/Web3StatusCard";
 
 interface BotCharacter {
   id: string;
@@ -624,6 +625,10 @@ export default function QuantVillagePage() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="mb-6">
+        <Web3StatusCard compact />
       </div>
 
       {/* Main Grid Layout - Fixed Height matching bug fixed! */}

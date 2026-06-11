@@ -12,6 +12,72 @@ It integrates:
 
 ---
 
+## Optional Web3 / Base Integration
+
+NoSlip supports an optional Web3 extension for wallet-based access, credit
+purchases, and future utility-token features. The core analytics system can
+still run locally without wallet login.
+
+Current direction:
+- Base wallet login with a signed, non-transaction authentication message
+- off-chain NoSlip Credits with an auditable ledger
+- optional Base Sepolia USDC payment-intent readiness
+- premium feature gates with server-defined costs
+- future NSQ utility-token design
+
+The default payment mode is `mock` on `base-sepolia`. Base mainnet payment
+intents are blocked unless explicitly enabled after production review. The
+current browser connector supports injected EVM wallets; the
+`NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` variable is reserved for a later
+WalletConnect adapter.
+
+NSQ is planned only as a utility token for product access, API usage,
+signal-marketplace features, and reputation-based creator tools. It is not an
+investment product and does not provide guaranteed returns, profit sharing,
+trading yield, or automatic trading-profit distribution.
+
+NoSlip provides analytics software only. It is not financial advice, investment
+advice, or a licensed broker/dealer service. No trading performance is
+guaranteed, and users are responsible for their own decisions.
+
+Privacy and security:
+- Local-first workflows remain available without wallet login.
+- Hosted prediction endpoints may receive the rows or inputs submitted to them.
+- Inspect `PREDICTION_API_URL` and `NOSLIP_WEB_APP_URL` before sending data.
+- Never upload a private key, seed phrase, or exchange API key.
+- Hosted credit/payment mutations require a wallet session or bearer API token.
+
+See `SECURITY_WEB3.md`, `docs/web3_data_flow.md`, and `contracts/README.md`.
+
+---
+
+## Optional Securities Open API Integration
+
+NoSlip includes optional broker adapters for:
+
+- **Toss Securities**: official OAuth2 REST Open API for prices, accounts,
+  holdings, order history, previews, and tightly gated library-level orders.
+- **Yuanta Securities**: official Windows COM/DLL API through a loopback,
+  bearer-authenticated Windows bridge.
+
+Both providers are `disabled` by default. MCP and Telegram provide broker
+status, prices, holdings, and order previews only; they cannot submit, modify,
+or cancel an order. Yuanta live order submission is not implemented. Toss live
+submission requires three explicit safety gates and should remain disabled
+until account-owner testing and operational review are complete.
+
+Yuanta's vendor module is Windows-only. macOS/Linux hosts must use an SSH tunnel
+to the loopback Windows bridge and must never expose the bridge port directly.
+Broker passwords, certificate passwords, client secrets, and account passwords
+must not be uploaded to the web app, Telegram, MCP, or source control.
+
+See `docs/broker_open_api.md` and `SECURITY_BROKER.md`.
+
+NoSlip is not financial advice, investment advice, or a licensed broker/dealer
+service. No trading performance is guaranteed.
+
+---
+
 ## Core System Features
 
 ### 1. Multi-Agent Consensus Roundtable
@@ -138,6 +204,15 @@ No Slip includes a **Model Context Protocol (MCP)** JSON-RPC server that exposes
 ### MCP Tools Provided
 1. `analyze_ticker`: Prompts the 6-Agent Consensus engine to run a real-time evaluation.
 2. `run_league_tournament`: Executes the 60-day backtest tournament leaderboard.
+3. `get_credit_balance`: Reads an off-chain credit account and recent ledger entries.
+4. `estimate_feature_cost`: Reads server-defined premium feature pricing.
+5. `create_credit_payment_intent`: Prepares a user-signed Base payment flow.
+6. `confirm_credit_payment`: Requests backend verification; it never signs a transaction.
+7. `check_premium_access`: Checks balance without consuming credits.
+8. `get_broker_status`: Reads local Toss/Yuanta integration readiness.
+9. `get_broker_prices`: Reads configured broker price data.
+10. `get_broker_holdings`: Reads configured account holdings.
+11. `prepare_broker_order`: Validates an order preview without submitting it.
 
 ### Installation / Registration
 Add the following to your Claude Desktop configuration file (typically `~/Library/Application Support/Claude/claude_desktop_config.json`):
@@ -160,15 +235,26 @@ Add the following to your Claude Desktop configuration file (typically `~/Librar
 
 ## Local Development & Setup
 
+Run the setup commands from the repository root. If your shell is currently in
+`services/`, `services/trader/`, or another repository subdirectory, first run:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+```
+
 ### 1. Install Node Dependencies (Next.js)
 ```bash
 npm install
 ```
 
 ### 2. Create Python Environment & Install Core Packages
+Python 3.10 or newer is recommended. The macOS system Python 3.9 may still run
+the current services, but some upstream Google packages emit end-of-life
+warnings.
+
 ```bash
 python3 -m venv services/trader/.venv
-services/trader/.venv/bin/pip install -r services/trader/requirements.txt
+services/trader/.venv/bin/python -m pip install -r services/trader/requirements.txt
 ```
 
 ### 3. Environment Variables Config (`.env`)
@@ -179,7 +265,27 @@ TELEGRAM_CHAT_ID=your_allowed_chat_ids (comma-separated)
 GEMINI_API_KEY=your_google_ai_studio_key
 NEXT_PUBLIC_TOSS_CLIENT_KEY=your_toss_payments_client_key
 TOSS_SECRET_KEY=your_toss_payments_secret_key
-PREDICTION_API_TOKEN=your_shared_api_secret_token
+PREDICTION_API_URL=http://localhost:8000
+PREDICTION_API_TOKEN=
+NEXT_PUBLIC_BASE_CHAIN_ID=8453
+NEXT_PUBLIC_BASE_SEPOLIA_CHAIN_ID=84532
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=
+NOSLIP_PAYMENT_MODE=mock
+NOSLIP_CHAIN_MODE=base-sepolia
+NOSLIP_ALLOW_BASE_MAINNET=false
+NOSLIP_SESSION_SECRET=replace_with_at_least_32_random_characters
+NOSLIP_API_TOKEN=replace_with_a_shared_hosted_api_token
+NOSLIP_WEB_APP_URL=http://localhost:3000
+NOSLIP_DASHBOARD_URL=http://localhost:3000
+TOSS_SECURITIES_MODE=disabled
+TOSS_SECURITIES_CLIENT_ID=
+TOSS_SECURITIES_CLIENT_SECRET=
+TOSS_SECURITIES_ACCOUNT_SEQ=
+TOSS_SECURITIES_ALLOW_LIVE_ORDERS=false
+YUANTA_SECURITIES_MODE=disabled
+YUANTA_BRIDGE_URL=http://127.0.0.1:8765
+YUANTA_BRIDGE_TOKEN=replace_with_at_least_32_random_characters
+YUANTA_BRIDGE_DRIVER=mock
 ```
 
 ### 4. Running the Applications
@@ -196,6 +302,50 @@ PREDICTION_API_TOKEN=your_shared_api_secret_token
   ```bash
   services/trader/.venv/bin/python services/trader/whale_pump_monitor.py
   ```
+- **Yuanta local mock/Windows bridge**:
+  ```bash
+  services/trader/.venv/bin/python -m services.trader.brokers.yuanta_bridge
+  ```
+
+### 5. Tests
+
+```bash
+# Securities adapter tests; no live broker calls
+services/trader/.venv/bin/python -m unittest discover -s services/trader/tests -v
+
+# Credit ledger, payment intent, and feature-gate tests
+npm test
+
+# Hardhat 3 / OpenZeppelin contract dependencies
+cd contracts
+npm install
+npm run compile
+npm test
+```
+
+Local contract deployment:
+
+```bash
+# Terminal 1
+cd contracts
+npm run node
+
+# Terminal 2
+cd contracts
+npm run deploy:local
+```
+
+Base Sepolia only:
+
+```bash
+cd contracts
+npx hardhat keystore set BASE_SEPOLIA_RPC_URL
+npx hardhat keystore set BASE_SEPOLIA_PRIVATE_KEY
+npm run deploy:base-sepolia
+```
+
+Do not deploy these draft contracts to Base mainnet without independent legal,
+security, and operational review.
 
 ---
 

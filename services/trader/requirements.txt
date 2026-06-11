@@ -12,4 +12,4 @@ python-dotenv>=1.0.0
 pillow>=10.0.0
 fastapi>=0.115
 uvicorn[standard]>=0.30
-
+pywin32>=306; platform_system == "Windows"
