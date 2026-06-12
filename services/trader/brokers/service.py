@@ -5,6 +5,7 @@ from typing import Any
 from .base import BrokerConfigError, OrderRequest
 from .toss_securities import TossSecuritiesClient
 from .yuanta_securities import YuantaSecuritiesClient
+from .kb_securities import KBSecuritiesClient
 
 
 def normalize_provider(provider: str) -> str:
@@ -18,10 +19,14 @@ def normalize_provider(provider: str) -> str:
         "yuanta-securities": "yuanta",
         "유안타": "yuanta",
         "유안타증권": "yuanta",
+        "kb": "kb",
+        "kb-securities": "kb",
+        "kb증권": "kb",
+        "국민은행증권": "kb",
     }
     resolved = aliases.get(normalized)
     if not resolved:
-        raise BrokerConfigError("provider must be 'toss' or 'yuanta'.")
+        raise BrokerConfigError("provider must be 'toss', 'yuanta', or 'kb'.")
     return resolved
 
 
@@ -29,6 +34,8 @@ def get_broker(provider: str, *, transport=None):
     resolved = normalize_provider(provider)
     if resolved == "toss":
         return TossSecuritiesClient.from_env(transport=transport)
+    elif resolved == "kb":
+        return KBSecuritiesClient.from_env(transport=transport)
     return YuantaSecuritiesClient.from_env(transport=transport)
 
 
@@ -41,6 +48,7 @@ def broker_status(provider: str = "") -> dict[str, Any]:
         "brokers": [
             TossSecuritiesClient.from_env().status(),
             YuantaSecuritiesClient.from_env().status(),
+            KBSecuritiesClient.from_env().status(),
         ],
     }
 

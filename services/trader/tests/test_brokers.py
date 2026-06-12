@@ -11,6 +11,7 @@ from services.trader.brokers.base import (
     OrderRequest,
 )
 from services.trader.brokers.toss_securities import TossSecuritiesClient
+from services.trader.brokers.kb_securities import KBSecuritiesClient
 from services.trader.brokers.http import RequestsTransport
 from services.trader.brokers.yuanta_securities import YuantaSecuritiesClient
 from services.trader.brokers.yuanta_windows_driver import MockYuantaDriver
@@ -231,6 +232,80 @@ class YuantaSecuritiesTests(unittest.TestCase):
             driver = MockYuantaDriver()
         self.assertFalse(driver.status()["connected"])
         self.assertEqual(driver.get_prices(["005930"])[0]["lastPrice"], "71000")
+
+
+class KBSecuritiesTests(unittest.TestCase):
+    def setUp(self):
+        self.transport = FakeTransport()
+        self.client = KBSecuritiesClient(
+            client_id="client-id",
+            client_secret="client-secret",
+            account_seq="1",
+            mode=BrokerMode.READ_ONLY,
+            transport=self.transport,
+            clock=lambda: 1000,
+        )
+
+    def test_token_is_cached_and_account_header_is_added(self):
+        self.client.get_holdings()
+        self.client.get_holdings()
+        token_calls = [
+            call for call in self.transport.requests if call[1].endswith("/oauth2/token")
+        ]
+        holding_calls = [
+            call
+            for call in self.transport.requests
+            if call[1].endswith("/api/v1/holdings")
+        ]
+        self.assertEqual(len(token_calls), 1)
+        self.assertEqual(len(holding_calls), 2)
+        headers = holding_calls[0][2]["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer test-access-token")
+        self.assertEqual(headers["X-KBsec-Account"], "1")
+
+    def test_prices_are_normalized(self):
+        payload = self.client.get_prices(["005930", "005930"])
+        self.assertEqual(payload["result"][0]["lastPrice"], "72000")
+        price_call = self.transport.requests[-1]
+        self.assertEqual(price_call[2]["params"]["symbols"], "005930")
+
+    def test_live_order_is_blocked_by_default(self):
+        order = OrderRequest.create(
+            symbol="005930",
+            side="BUY",
+            order_type="LIMIT",
+            quantity=1,
+            price=70000,
+        )
+        with self.assertRaises(BrokerSafetyError):
+            self.client.submit_order(order, confirmation="SUBMIT_LIVE_ORDER")
+
+    def test_live_order_requires_and_uses_explicit_confirmation(self):
+        client = KBSecuritiesClient(
+            client_id="client-id",
+            client_secret="client-secret",
+            account_seq="1",
+            mode=BrokerMode.LIVE,
+            allow_live_orders=True,
+            transport=self.transport,
+            clock=lambda: 1000,
+        )
+        order = OrderRequest.create(
+            symbol="005930",
+            side="BUY",
+            order_type="LIMIT",
+            quantity=1,
+            price=70000,
+            client_order_id="test-order",
+        )
+        with self.assertRaises(BrokerSafetyError):
+            client.submit_order(order)
+        payload = client.submit_order(
+            order, confirmation="SUBMIT_LIVE_ORDER"
+        )
+        self.assertEqual(payload["result"]["orderId"], "order-1")
+        order_call = self.transport.requests[-1]
+        self.assertEqual(order_call[2]["json_body"]["clientOrderId"], "test-order")
 
 
 class RequestsTransportTests(unittest.TestCase):
