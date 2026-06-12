@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>No Slip Quant — 서버 대기 중</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#0a0a0a; color:#f5f5f5; font-family:-apple-system,'Segoe UI',sans-serif; }
+  .card { max-width:620px; padding:48px 56px; background:#111; border:1px solid #262626;
+          border-radius:20px; border-top:6px solid #00f5d4; }
+  h1 { font-size:26px; margin:0 0 6px; } h1 span { color:#00f5d4; }
+  p.sub { color:#9ca3af; margin:0 0 28px; }
+  .step { display:flex; gap:14px; margin:18px 0; align-items:flex-start; }
+  .num { background:#00f5d4; color:#000; font-weight:700; width:26px; height:26px;
+         border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; }
+  code { display:block; background:#000; border:1px solid #262626; border-radius:8px;
+         padding:10px 14px; margin-top:6px; color:#00f5d4; font-size:13px; overflow-x:auto; }
+  .pulse { display:inline-block; width:10px; height:10px; border-radius:50%; background:#f59e0b;
+           margin-right:8px; animation:p 1.2s infinite; }
+  @keyframes p { 50% { opacity:.25 } }
+  .foot { margin-top:28px; color:#555; font-size:12.5px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1><span>No Slip Quant</span> 대시보드 연결 대기</h1>
+    <p class="sub"><span class="pulse"></span>localhost:3000 응답을 기다리는 중 — 서버가 켜지면 자동으로 연결됩니다 (5초 간격 재시도)</p>
+    <div class="step"><div class="num">1</div><div>저장소 폴더에서 대시보드 서버 시작
+      <code>cd noslip_quant_bot && npm run dev</code></div></div>
+    <div class="step"><div class="num">2</div><div>(선택) 텔레그램 봇/모니터 데몬 시작
+      <code>services/trader/.venv/bin/python services/trader/telegram_interactive_bot.py</code></div></div>
+    <div class="step"><div class="num">3</div><div>원격 서버를 쓰는 경우 환경변수로 실행
+      <code>NOSLIP_DASHBOARD_URL=https://your-host  open -a "No Slip Quant"</code></div></div>
+    <div class="foot">메뉴 Dashboard → "새로고침 / 재연결" (⌘R)로 즉시 재시도할 수 있습니다.</div>
+  </div>
+</body>
+</html>

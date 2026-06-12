@@ -92,3 +92,7 @@ test_image.jpg
 .claude/
 services/trader/model_cache/peer_identity.json
 services/trader/scratch_test_alpha.py
+
+# electron desktop app
+desktop/node_modules/
+desktop/dist/
