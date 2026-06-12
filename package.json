@@ -47,6 +47,8 @@
   "build": {
     "appId": "com.noslip.app",
     "productName": "NoSlipQuant",
+    "asar": false,
+    "icon": "electron/icon.png",
     "mac": {
       "category": "public.app-category.finance",
       "target": [
@@ -58,6 +60,11 @@
         "nsis"
       ]
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
     "directories": {
       "output": "dist-desktop"
     },
@@ -65,6 +72,8 @@
       "package.json",
       "electron/**/*",
       "build/**/*",
+      ".next/**/*",
+      "!.next/cache/**/*",
       "server/**/*",
       "public/**/*",
       "node_modules/**/*"

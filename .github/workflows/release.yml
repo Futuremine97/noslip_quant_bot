@@ -9,6 +9,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # next build placeholders (real values live in the user's local .env)
+  NEXT_PUBLIC_TOSS_CLIENT_KEY: "test_ck_placeholder"
+  NEXT_TELEMETRY_DISABLED: "1"
+
 jobs:
   build-mac:
     name: Build macOS dmg
@@ -18,15 +23,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install & build dmg
-        working-directory: desktop
-        run: |
-          npm install --no-audit --no-fund
-          npx electron-builder --mac --publish never
+          cache: npm
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build Next.js production bundle
+        run: npm run build
+      - name: Package dmg
+        run: npx electron-builder --mac --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: mac-dmg
-          path: desktop/dist/*.dmg
+          path: dist-desktop/*.dmg
 
   build-win:
     name: Build Windows exe
@@ -36,15 +43,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install & build exe
-        working-directory: desktop
-        run: |
-          npm install --no-audit --no-fund
-          npx electron-builder --win --publish never
+          cache: npm
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build Next.js production bundle
+        run: npm run build
+      - name: Package exe
+        run: npx electron-builder --win --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: win-exe
-          path: desktop/dist/*.exe
+          path: dist-desktop/*.exe
 
   release:
     name: Publish GitHub Release
@@ -70,9 +79,12 @@ jobs:
             | macOS (Apple Silicon/Intel) | `.dmg` | 열어서 Applications로 드래그 |
             | Windows 10/11 (x64) | `.exe` | 설치 마법사 실행 |
 
-            앱은 로컬 대시보드(`npm run dev`, localhost:3000)에 자동 연결됩니다.
-            서버가 꺼져 있으면 시작 안내 화면이 표시되고 5초 간격으로 자동 재연결합니다.
-            원격 서버: `NOSLIP_DASHBOARD_URL` 환경변수로 지정.
+            앱 실행 시 내장된 Next.js 대시보드 + API 서버가 자동 시작됩니다
+            (별도 터미널 불필요). 서버 준비 전에는 대기 화면이 표시되고
+            3초 간격으로 자동 연결됩니다.
+
+            - 포트 변경: `NOSLIP_PORT` / 원격 서버: `NOSLIP_DASHBOARD_URL`
+            - 트레이딩 봇·텔레그램 데몬(Python)은 별도 실행 (README 참고)
 
             ⚠️ 코드서명 미적용: macOS는 첫 실행 시 우클릭→열기,
             Windows는 SmartScreen에서 "추가 정보→실행"이 필요할 수 있습니다.
