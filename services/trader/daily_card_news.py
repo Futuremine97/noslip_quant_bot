@@ -27,11 +27,19 @@ import argparse
 import json
 import os
 import sys
+import math
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from PIL import Image, ImageDraw, ImageFont
+
+try:
+    import google.generativeai as genai
+    HAS_GEMINI = True
+except ImportError:
+    HAS_GEMINI = False
 
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent.parent
@@ -376,44 +384,383 @@ def publish_instagram_carousel(paths: list[Path], caption: str):
         print(f"❌ Instagram publish failed: {e}")
 
 
+# ----------------- Custom Topic & Pillow Drawing Renderer -----------------
+
+def get_font_by_lang(size: int, index: int = 0, lang: str = "ko"):
+    """Pick optimal font by language (AppleSDGothicNeo for ko, Hiragino/Osaka for ja)."""
+    font_path_ko = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
+    
+    # Try Japanese specific fonts first if lang is ja
+    if lang in ["ja", "jp"]:
+        candidates = [
+            "/System/Library/Fonts/Hiragino Sans W3.ttc",
+            "/System/Library/Fonts/ヒラギノ角ゴ ProN W3.otf",
+            "/System/Library/Fonts/MS Gothic.ttf",
+            "/System/Library/Fonts/Osaka.ttf"
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                try:
+                    return ImageFont.truetype(path, size, index=0)
+                except:
+                    pass
+        # Fallback to standard AppleSDGothicNeo which often has good CJK support
+        if os.path.exists(font_path_ko):
+            try:
+                return ImageFont.truetype(font_path_ko, size, index=index)
+            except:
+                pass
+    else:
+        if os.path.exists(font_path_ko):
+            try:
+                return ImageFont.truetype(font_path_ko, size, index=index)
+            except:
+                pass
+                
+    return ImageFont.load_default()
+
+def create_diagonal_gradient(width, height, color1, color2):
+    base = Image.new("RGBA", (width, height))
+    pixels = base.load()
+    for y in range(height):
+        for x in range(width):
+            ratio = (x + y) / (width + height)
+            r = int(color1[0] * (1 - ratio) + color2[0] * ratio)
+            g = int(color1[1] * (1 - ratio) + color2[1] * ratio)
+            b = int(color1[2] * (1 - ratio) + color2[2] * ratio)
+            pixels[x, y] = (r, g, b, 255)
+    return base
+
+def draw_dotted_line(draw, points, fill=(226, 110, 80, 120), width=2, gap=10):
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        x2, y2 = points[i+1]
+        dx = x2 - x1
+        dy = y2 - y1
+        dist = math.sqrt(dx**2 + dy**2)
+        if dist == 0:
+            continue
+        step_x = (dx / dist) * gap
+        step_y = (dy / dist) * gap
+        current_x, current_y = x1, y1
+        accum_dist = 0
+        draw_dash = True
+        while accum_dist < dist:
+            next_x = min(current_x + step_x, x2) if dx >= 0 else max(current_x + step_x, x2)
+            next_y = min(current_y + step_y, y2) if dy >= 0 else max(current_y + step_y, y2)
+            if draw_dash:
+                draw.line([(current_x, current_y), (next_x, next_y)], fill=fill, width=width)
+            current_x, current_y = next_x, next_y
+            accum_dist += gap
+            draw_dash = not draw_dash
+
+def draw_grid_lines(img, step=70, color=(0, 230, 118, 14)):
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+    for x in range(0, w, step):
+        draw.line([(x, 0), (x, h)], fill=color, width=1)
+    for y in range(0, h, step):
+        draw.line([(0, y), (w, y)], fill=color, width=1)
+
+def draw_glow_dots(img, dots, color=(0, 230, 118, 100)):
+    draw = ImageDraw.Draw(img)
+    for cx, cy, radius in dots:
+        for r in range(radius * 3, radius, -2):
+            alpha = int(40 * (1.0 - (r - radius) / (radius * 2)))
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(color[0], color[1], color[2], alpha))
+        draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=(255, 255, 255, 255))
+
+# 3 unique theme drawers
+def build_theme_cyber():
+    img = create_diagonal_gradient(1080, 1080, (4, 12, 24), (12, 34, 58))
+    draw_grid_lines(img, step=75, color=(0, 245, 212, 12))
+    draw = ImageDraw.Draw(img)
+    draw.arc([100, 100, 980, 980], start=180, end=270, fill=(0, 245, 212, 40), width=2)
+    draw_dotted_line(draw, [(100, 980), (980, 100)], fill=(217, 70, 239, 120), width=4, gap=15)
+    draw_glow_dots(img, [(980, 100, 12)], (217, 70, 239))
+    return img
+
+def build_theme_emerald():
+    img = create_diagonal_gradient(1080, 1080, (4, 18, 14), (16, 42, 34))
+    draw_grid_lines(img, step=70, color=(0, 230, 118, 12))
+    draw = ImageDraw.Draw(img)
+    draw.line([(100, 900), (300, 800), (500, 850), (700, 600), (900, 500), (1000, 300)], fill=(0, 230, 118, 100), width=4, joint="round")
+    draw_glow_dots(img, [(1000, 300, 10)], (0, 230, 118))
+    return img
+
+def build_theme_peach():
+    img = create_diagonal_gradient(1080, 1080, (255, 230, 217), (255, 246, 232))
+    draw = ImageDraw.Draw(img)
+    draw_dotted_line(draw, [(150, 900), (450, 800), (750, 880), (950, 750)], fill=(226, 110, 80, 150), width=4, gap=15)
+    draw.ellipse([930, 730, 970, 770], fill=(226, 110, 80, 200), outline=(255, 255, 255, 255), width=2)
+    return img
+
+def wrap_text_chars(text, font, max_width, draw):
+    lines = []
+    current_line = ""
+    for char in text:
+        test_line = current_line + char
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        w = bbox[2] - bbox[0]
+        if w <= max_width:
+            current_line = test_line
+        else:
+            if current_line:
+                lines.append(current_line)
+            current_line = char
+    if current_line:
+        lines.append(current_line)
+    return lines
+
+def create_pillow_slide(bg_img, slide_num, total_slides, title, subtitle, bullets, is_cover=False, lang="ko"):
+    """Assemble a single custom theme slide with glassmorphic panel."""
+    # Check if bg is peach (which is light)
+    is_light = (bg_img.getpixel((0,0))[0] > 200)
+    
+    color_text = (45, 36, 32, 255) if is_light else (245, 245, 245, 255)
+    color_sub = (226, 110, 80, 255) if is_light else (0, 245, 212, 255)
+    color_muted = (115, 102, 95, 255) if is_light else (156, 163, 175, 255)
+    panel_fill = (255, 253, 251, 225) if is_light else (17, 17, 17, 210)
+    panel_border = (226, 110, 80, 40) if is_light else (255, 255, 255, 30)
+    
+    overlay = Image.new("RGBA", (1080, 1080), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    
+    # 1. Translucent Panel
+    card_left, card_top = 80, 120
+    card_right, card_bottom = 1080 - 80, 1080 - 120
+    card_width = card_right - card_left
+    
+    draw.rounded_rectangle(
+        [card_left, card_top, card_right, card_bottom],
+        radius=28,
+        fill=panel_fill,
+        outline=panel_border,
+        width=2
+    )
+    
+    # Fonts
+    font_bold = get_font_by_lang(52, index=6, lang=lang)
+    font_medium = get_font_by_lang(28, index=2, lang=lang)
+    font_regular = get_font_by_lang(23, index=0, lang=lang)
+    font_semibold = get_font_by_lang(22, index=4, lang=lang)
+    
+    # 2. Side accent line
+    draw.rounded_rectangle(
+        [card_left + 50, card_top + 60, card_left + 58, card_top + 140],
+        radius=4,
+        fill=color_sub
+    )
+    
+    # 3. Title & Subtitle
+    title_x = card_left + 80
+    title_y = card_top + 55
+    draw.text((title_x, title_y), title, font=font_bold, fill=color_text)
+    draw.text((title_x, title_y + 70), subtitle, font=font_medium, fill=color_sub)
+    
+    # Divider
+    divider_y = title_y + 125
+    draw.line([(card_left + 50, divider_y), (card_right - 50, divider_y)], fill=panel_border, width=1)
+    
+    # 4. Body content
+    body_y = divider_y + 45
+    content_width = card_width - 100
+    
+    if is_cover:
+        body_y = divider_y + 80
+        for line in bullets:
+            wrapped = wrap_text_chars(line, font_medium, content_width, draw)
+            for wl in wrapped:
+                bbox = draw.textbbox((0, 0), wl, font=font_medium)
+                text_w = bbox[2] - bbox[0]
+                draw.text((1080 // 2 - text_w // 2, body_y), wl, font=font_medium, fill=color_text)
+                body_y += 48
+            body_y += 18
+    else:
+        for bullet in bullets:
+            wrapped = wrap_text_chars(bullet, font_regular, content_width - 30, draw)
+            for i, wl in enumerate(wrapped):
+                if i == 0:
+                    draw.text((card_left + 50, body_y), "•", font=font_regular, fill=color_sub)
+                    draw.text((card_left + 80, body_y), wl, font=font_regular, fill=color_text)
+                else:
+                    draw.text((card_left + 80, body_y), wl, font=font_regular, fill=color_text)
+                body_y += 38
+            body_y += 18
+            
+    # 5. Footer Info
+    footer_y = card_bottom - 60
+    draw.text((card_left + 50, footer_y), "NO SLIP AUTOMATION" if lang in ["ja", "jp"] else "노슬립 퀀트 자동화", font=font_semibold, fill=color_muted)
+    
+    page_str = f"{slide_num:02d} / {total_slides:02d}"
+    bbox = draw.textbbox((0, 0), page_str, font=font_semibold)
+    page_w = bbox[2] - bbox[0]
+    draw.text((card_right - 50 - page_w, footer_y), page_str, font=font_semibold, fill=color_muted)
+    
+    # Composite overlay on background
+    final_img = Image.alpha_composite(bg_img.convert("RGBA"), overlay)
+    return final_img.convert("RGB")
+
+def generate_topic_cardnews_data(topic: str, lang: str = "ko") -> list[dict] | None:
+    """Generate 5 cardnews slide data structures based on custom topic using Gemini."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("⚠️ GEMINI_API_KEY is missing. Cannot call Gemini.")
+        return None
+    if not HAS_GEMINI:
+        print("⚠️ google-generativeai package is not installed.")
+        return None
+        
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-flash-latest")
+    
+    target_lang = "Japanese" if lang in ["ja", "jp"] else "Korean"
+    
+    prompt = f"""
+You are a highly skilled infographic content writer and graphic designer.
+Create a structured 5-slide cardnews text content for the given topic in "{target_lang}" language.
+
+Topic: "{topic}"
+
+[Guidelines]
+1. Generate exactly 5 slides.
+2. Slide 1 (index 0) must act as a Cover with summary intro lines in "bullets".
+3. Slides 2-5 must cover 4 distinct key subtopics.
+4. Each slide must contain:
+   - "title": A short catchy slide title (max 20 chars).
+   - "subtitle": Subtitle expanding the title (max 35 chars).
+   - "bullets": An array of 3-4 bullet point sentences.
+   - "theme": One of "dark_cyber", "emerald_green", "warm_peach" depending on topic tone:
+     * "dark_cyber": For tech, AI, space, science, computing, security.
+     * "emerald_green": For money, economics, finance, stock market, crypto, business.
+     * "warm_peach": For travel, lifestyle, food, coffee, books, history.
+5. Output MUST be a valid JSON array block only. Do NOT include markdown code fences (like ```json) or any conversational text.
+
+[Output JSON Schema Example]
+[
+  {{
+    "title": "SPACEX",
+    "subtitle": "우주항공의 역사를 새로 쓰다",
+    "bullets": [
+      "재사용 로켓으로 발사 비용 90% 이상 절감",
+      "스타링크를 통한 글로벌 초고속 위성 인터넷망",
+      "화성 이주와 다행성 생명체를 꿈꾸는 프로젝트"
+    ],
+    "theme": "dark_cyber"
+  }},
+  ...
+]
+"""
+    try:
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        return json.loads(text)
+    except Exception as e:
+        print(f"❌ Gemini content generation failed: {e}")
+        return None
+
 # ----------------- Pipeline -----------------
 
 def generate_card_news(demo: bool = False, outdir: str | None = None,
-                       send: bool = True, instagram: bool = False) -> list[str]:
+                       send: bool = True, instagram: bool = False,
+                       topic: str | None = None, lang: str = "ko") -> list[str]:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT_DIR / ".env")
     setup_korean_font()
     today = datetime.now()
     date_str = today.strftime("%Y년 %m월 %d일 (%a)")
-    out = Path(outdir) if outdir else OUT_BASE / today.strftime("%Y%m%d")
+    
+    # Setup directories
+    folder_name = today.strftime("%Y%m%d")
+    if topic:
+        safe_topic = "".join(c for c in topic if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+        folder_name += f"_{safe_topic}"
+    out = Path(outdir) if outdir else OUT_BASE / folder_name
     out.mkdir(parents=True, exist_ok=True)
 
-    print("📡 1/3 Collecting market data...")
-    snap = demo_snapshot() if demo else fetch_market_snapshot()
-    pdata = get_prophet_card_data(demo=demo)
+    if topic:
+        print(f"📡 1/3 Generating topic content for '{topic}' in language '{lang}' via Gemini...")
+        topic_data = generate_topic_cardnews_data(topic, lang)
+        if not topic_data or len(topic_data) < 5:
+            raise RuntimeError("Failed to generate custom topic cardnews data from Gemini.")
+            
+        print("🎨 2/3 Rendering cards via custom Pillow vector theme drawers...")
+        paths = []
+        total = 5
+        
+        theme_map = {
+            "dark_cyber": build_theme_cyber,
+            "emerald_green": build_theme_emerald,
+            "warm_peach": build_theme_peach
+        }
+        
+        for idx, slide in enumerate(topic_data[:5]):
+            slide_num = idx + 1
+            theme_name = slide.get("theme", "dark_cyber")
+            bg_builder = theme_map.get(theme_name, build_theme_cyber)
+            
+            bg_img = bg_builder()
+            
+            slide_img = create_pillow_slide(
+                bg_img=bg_img,
+                slide_num=slide_num,
+                total_slides=total,
+                title=slide.get("title", ""),
+                subtitle=slide.get("subtitle", ""),
+                bullets=slide.get("bullets", []),
+                is_cover=(slide_num == 1),
+                lang=lang
+            )
+            
+            p = out / f"card_{slide_num}_topic.png"
+            slide_img.save(p, "PNG")
+            paths.append(p)
+            print(f"   🖼️ {p} (theme: {theme_name})")
+    else:
+        print("📡 1/3 Collecting market data...")
+        snap = demo_snapshot() if demo else fetch_market_snapshot()
+        pdata = get_prophet_card_data(demo=demo)
 
-    print("🎨 2/3 Rendering cards...")
-    total = 5
-    paths = [
-        out / "card_1_cover.png", out / "card_2_market.png", out / "card_3_movers.png",
-        out / "card_4_prophet.png", out / "card_5_outro.png",
-    ]
-    card_cover(date_str, snap, paths[0], total)
-    card_market(snap, paths[1], total)
-    card_movers(snap, paths[2], total)
-    card_prophet(pdata, paths[3], total)
-    card_outro(snap, pdata, paths[4], total)
-    for p in paths:
-        print(f"   🖼️ {p}")
+        print("🎨 2/3 Rendering cards...")
+        total = 5
+        paths = [
+            out / "card_1_cover.png", out / "card_2_market.png", out / "card_3_movers.png",
+            out / "card_4_prophet.png", out / "card_5_outro.png",
+        ]
+        card_cover(date_str, snap, paths[0], total)
+        card_market(snap, paths[1], total)
+        card_movers(snap, paths[2], total)
+        card_prophet(pdata, paths[3], total)
+        card_outro(snap, pdata, paths[4], total)
+        for p in paths:
+            print(f"   🖼️ {p}")
 
     if send:
         print("📨 3/3 Sending Telegram album...")
-        send_telegram_album(paths, f"🗞️ <b>오늘의 시황 카드뉴스</b> | {date_str}")
+        caption_title = f"Topic: {topic}" if topic else "오늘의 시황 카드뉴스"
+        send_telegram_album(paths, f"🗞️ <b>{caption_title}</b> | {date_str}")
     else:
         print("⏭️ 3/3 Send skipped (--no-send)")
     if instagram:
         print("📷 Publishing Instagram carousel...")
-        ig_caption = (f"🗞️ 오늘의 시황 카드뉴스 | {date_str}\n\n"
-                      "AI 퀀트봇이 자동 생성한 데일리 마켓 브리핑입니다.\n"
-                      "#주식 #시황 #퀀트 #AI #비트코인 #noslipquant")
+        if topic:
+            if lang in ["ja", "jp"]:
+                ig_caption = (f"🗞️ カードニュース: {topic} | {date_str}\n\n"
+                              "AIが自動 생성한 맞춤형 테크/비즈니스 브리핑입니다.\n"
+                              "#ビジネス #テック #AI #スタートアップ #カードニュース #noslipquant")
+            else:
+                ig_caption = (f"🗞️ 카드뉴스: {topic} | {date_str}\n\n"
+                              "AI가 자동 생성한 맞춤형 테크/비즈니스 브리핑입니다.\n"
+                              "#주식 #시황 #AI #스타트업 #카드뉴스 #noslipquant")
+        else:
+            ig_caption = (f"🗞️ 오늘의 시황 카드뉴스 | {date_str}\n\n"
+                          "AI 퀀트봇이 자동 생성한 데일리 마켓 브리핑입니다.\n"
+                          "#주식 #시황 #퀀트 #AI #비트코인 #noslipquant")
         publish_instagram_carousel(paths, ig_caption)
     return [str(p) for p in paths]
 
@@ -424,10 +771,13 @@ def main():
     parser.add_argument("--no-send", action="store_true", help="Generate only; skip Telegram")
     parser.add_argument("--instagram", action="store_true", help="Also publish as Instagram carousel")
     parser.add_argument("--outdir", default=None, help="Output directory override")
+    parser.add_argument("--topic", default=None, help="Generate custom topic cardnews")
+    parser.add_argument("--lang", default="ko", help="Output language code (ko, ja, jp)")
     args = parser.parse_args()
     try:
         paths = generate_card_news(demo=args.demo, outdir=args.outdir,
-                                   send=not args.no_send, instagram=args.instagram)
+                                   send=not args.no_send, instagram=args.instagram,
+                                   topic=args.topic, lang=args.lang)
         print(json.dumps({"cards": paths}, ensure_ascii=False))
     except Exception as e:
         print(f"❌ Card news pipeline failed: {e}")
