@@ -315,6 +315,9 @@ def parse_cardnews_request(text: str) -> bool:
 def parse_onchain_request(text: str) -> bool:
     return text.strip() in ["/onchain", "/온체인", "/고래온체인", "/온체인고래"]
 
+def parse_arb_request(text: str) -> bool:
+    return text.strip() in ["/arb", "/차익", "/차익거래", "/아비트라지", "/arbitrage"]
+
 def parse_collect_request(text: str) -> str:
     """'/수집', '/수집 온|오프|현황' -> '' | 'on' | 'off' | 'stats'. None otherwise."""
     text = text.strip()
@@ -2289,6 +2292,18 @@ def main():
                     except Exception as e:
                         print(f"⚠️ Error executing card news: {e}")
                         reply_to_telegram(chat_id, f"⚠️ 카드뉴스 생성 중 오류가 발생했습니다: {escape_html(str(e))}", message_id)
+                    continue
+
+                # 0.35. Parse Korea Cross-Broker Arbitrage Request
+                if parse_arb_request(text):
+                    print(f"⚖️ Received arbitrage scan request from chat {chat_id}")
+                    reply_to_telegram(chat_id, "⏳ <b>한국 증권사 OPEN API 시세를 교차 스캔 중입니다 (2자간/3자간/다자간). 약 5~15초 소요됩니다...</b>", message_id)
+                    try:
+                        from korea_arbitrage import generate_arbitrage_report
+                        reply_to_telegram(chat_id, generate_arbitrage_report(html=True), message_id)
+                    except Exception as e:
+                        print(f"⚠️ Error executing arbitrage scan: {e}")
+                        reply_to_telegram(chat_id, f"⚠️ 차익거래 스캔 중 오류가 발생했습니다: {escape_html(str(e))}", message_id)
                     continue
 
                 # 0.4. Parse On-chain Whale Report Request

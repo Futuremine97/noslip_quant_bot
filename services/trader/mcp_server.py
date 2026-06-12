@@ -598,6 +598,33 @@ def main():
                               "required": ["user_id", "name"]
                             }
                           },
+                          {
+                            "name": "scan_korea_arbitrage",
+                            "description": "Scan Korean brokerage OPEN APIs (KIS, Kiwoom, KB, Shinhan, NH, Hana...) for cross-broker arbitrage opportunities: two-way (same symbol priced differently across brokers/venues e.g. KRX vs NXT routing), configured multi-leg routes (e.g. ETF vs basket NAV), and N-party negative-cycle loops found via Bellman-Ford. All edges are net of commission, securities transaction tax, and slippage.\n\nUse when the user asks about arbitrage opportunities across Korean brokers. READ-ONLY: fetches quotes and can produce order PREVIEWS, but never submits, modifies, or cancels orders.\n\nReturns a ranked opportunity report; optionally an execution plan of validated order previews for the top opportunity.",
+                            "inputSchema": {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "description": "Scan type: 'two' (2-way), 'route' (configured 3+ leg routes), 'multi' (N-party cycles), or 'all' (default).",
+                                  "enum": ["two", "route", "multi", "all"]
+                                },
+                                "symbols": {
+                                  "type": "array",
+                                  "items": {"type": "string"},
+                                  "description": "KRX ticker codes to scan (e.g. ['005930','000660']). Omit to use the configured watchlist."
+                                },
+                                "with_plan": {
+                                  "type": "boolean",
+                                  "description": "Also return validated order PREVIEWS (never submitted) for the top opportunity."
+                                },
+                                "demo": {
+                                  "type": "boolean",
+                                  "description": "Use synthetic offline quotes (testing without broker credentials)."
+                                }
+                              }
+                            }
+                          },
                           *WEB3_TOOL_DEFINITIONS,
                           *BROKER_TOOL_DEFINITIONS
                         ]
@@ -740,6 +767,20 @@ def main():
                     from peer_hub_client import view_signal_feed
                     result_text = view_signal_feed(arguments.get("symbol", "") or "",
                                                    int(arguments.get("limit", 20)))
+
+                elif tool_name == "scan_korea_arbitrage":
+                    from korea_arbitrage import (run_scan, build_execution_plan,
+                                                 generate_arbitrage_report)
+                    mode = arguments.get("mode", "all")
+                    demo = bool(arguments.get("demo", False))
+                    symbols = arguments.get("symbols") or None
+                    scan = run_scan(mode, demo=demo, symbols=symbols)
+                    summary = generate_arbitrage_report(html=False, demo=demo)
+                    if arguments.get("with_plan") and scan["opportunities"]:
+                        plan = build_execution_plan(scan["opportunities"][0])
+                        summary += ("\n\n📋 TOP 기회 주문 프리뷰 (제출되지 않음):\n"
+                                    + json.dumps(plan, ensure_ascii=False, indent=2, default=str))
+                    result_text = summary
 
                 elif tool_name in ("zero_shot_forecast", "train_personal_forecast",
                                    "get_personal_forecast"):
