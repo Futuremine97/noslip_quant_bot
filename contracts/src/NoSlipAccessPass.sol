@@ -17,13 +17,25 @@ contract NoSlipAccessPass is ERC721Pausable, Ownable {
 
     uint256 public nextTokenId = 1;
     mapping(uint256 tokenId => Tier tier) public tierOf;
+    mapping(Tier => uint256) public tierPrices;
 
     event AccessTierUpdated(uint256 indexed tokenId, Tier tier);
+    event TierPriceUpdated(Tier indexed tier, uint256 price);
 
     constructor(address initialOwner)
         ERC721("NoSlip Access Pass", "NSQPASS")
         Ownable(initialOwner)
-    {}
+    {
+        tierPrices[Tier.FREE] = 0;
+        tierPrices[Tier.PRO] = 0.01 ether;
+        tierPrices[Tier.RESEARCH] = 0.05 ether;
+        tierPrices[Tier.CREATOR] = 0.1 ether;
+    }
+
+    function setTierPrice(Tier tier, uint256 price) external onlyOwner {
+        tierPrices[tier] = price;
+        emit TierPriceUpdated(tier, price);
+    }
 
     function mint(address account, Tier tier)
         external
@@ -37,6 +49,20 @@ contract NoSlipAccessPass is ERC721Pausable, Ownable {
         emit AccessTierUpdated(tokenId, tier);
     }
 
+    function publicPurchasePass(Tier tier) external payable returns (uint256 tokenId) {
+        uint256 requiredPrice = tierPrices[tier];
+        require(msg.value >= requiredPrice, "NoSlip: insufficient payment");
+
+        tokenId = nextTokenId++;
+        tierOf[tokenId] = tier;
+        _safeMint(msg.sender, tokenId);
+        emit AccessTierUpdated(tokenId, tier);
+
+        if (msg.value > requiredPrice) {
+            payable(msg.sender).transfer(msg.value - requiredPrice);
+        }
+    }
+
     function setTier(uint256 tokenId, Tier tier) external onlyOwner {
         _requireOwned(tokenId);
         tierOf[tokenId] = tier;
@@ -46,6 +72,12 @@ contract NoSlipAccessPass is ERC721Pausable, Ownable {
     function burn(uint256 tokenId) external onlyOwner {
         _burn(tokenId);
         delete tierOf[tokenId];
+    }
+
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "NoSlip: zero balance");
+        payable(owner()).transfer(balance);
     }
 
     function pause() external onlyOwner {
