@@ -2,6 +2,7 @@
   "name": "noslip",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev",
     "dev:sp500": "NEXT_PUBLIC_SP500_ONLY=true next dev",
@@ -13,7 +14,8 @@
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts",
     "contracts:compile": "npm --prefix contracts run compile",
-    "contracts:test": "npm --prefix contracts test"
+    "contracts:test": "npm --prefix contracts test",
+    "desktop:build": "electron-builder --mac --win"
   },
   "dependencies": {
     "@tosspayments/payment-sdk": "^1.9.2",
@@ -34,10 +36,38 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4.2.2",
     "typescript": "^5",
     "vitest": "^4.1.4"
+  },
+  "build": {
+    "appId": "com.noslip.app",
+    "productName": "NoSlipQuant",
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "files": [
+      "package.json",
+      "electron/**/*",
+      "build/**/*",
+      "server/**/*",
+      "public/**/*",
+      "node_modules/**/*"
+    ]
   }
 }

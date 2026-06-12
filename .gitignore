@@ -39,6 +39,7 @@ contracts/ignition/deployments/
 
 # production
 /build
+/dist-desktop
 
 # misc
 .DS_Store
