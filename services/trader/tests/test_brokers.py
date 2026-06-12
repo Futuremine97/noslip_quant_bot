@@ -12,6 +12,11 @@ from services.trader.brokers.base import (
 )
 from services.trader.brokers.toss_securities import TossSecuritiesClient
 from services.trader.brokers.kb_securities import KBSecuritiesClient
+from services.trader.brokers.kis_securities import KISSecuritiesClient
+from services.trader.brokers.kiwoom_securities import KiwoomSecuritiesClient
+from services.trader.brokers.shinhan_securities import ShinhanSecuritiesClient
+from services.trader.brokers.nh_securities import NHSecuritiesClient
+from services.trader.brokers.hana_securities import HanaSecuritiesClient
 from services.trader.brokers.http import RequestsTransport
 from services.trader.brokers.yuanta_securities import YuantaSecuritiesClient
 from services.trader.brokers.yuanta_windows_driver import MockYuantaDriver
@@ -306,6 +311,134 @@ class KBSecuritiesTests(unittest.TestCase):
         self.assertEqual(payload["result"]["orderId"], "order-1")
         order_call = self.transport.requests[-1]
         self.assertEqual(order_call[2]["json_body"]["clientOrderId"], "test-order")
+
+
+class KISSecuritiesTests(unittest.TestCase):
+    def setUp(self):
+        self.transport = FakeTransport()
+        self.client = KISSecuritiesClient(
+            client_id="client-id",
+            client_secret="client-secret",
+            account_seq="1",
+            mode=BrokerMode.READ_ONLY,
+            transport=self.transport,
+            clock=lambda: 1000,
+        )
+
+    def test_token_is_cached_and_account_header_is_added(self):
+        self.client.get_holdings()
+        self.client.get_holdings()
+        token_calls = [
+            call for call in self.transport.requests if call[1].endswith("/oauth2/token")
+        ]
+        holding_calls = [
+            call
+            for call in self.transport.requests
+            if call[1].endswith("/api/v1/holdings")
+        ]
+        self.assertEqual(len(token_calls), 1)
+        self.assertEqual(len(holding_calls), 2)
+        headers = holding_calls[0][2]["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer test-access-token")
+        self.assertEqual(headers["appkey"], "client-id")
+        self.assertEqual(headers["appsecret"], "client-secret")
+        self.assertEqual(headers["X-KIS-Account"], "1")
+
+
+class KiwoomSecuritiesTests(unittest.TestCase):
+    def setUp(self):
+        self.transport = FakeTransport()
+        self.client = KiwoomSecuritiesClient(
+            client_id="client-id",
+            client_secret="client-secret",
+            account_seq="1",
+            mode=BrokerMode.READ_ONLY,
+            transport=self.transport,
+            clock=lambda: 1000,
+        )
+
+    def test_token_is_cached_and_account_header_is_added(self):
+        self.client.get_holdings()
+        holding_calls = [
+            call
+            for call in self.transport.requests
+            if call[1].endswith("/api/v1/holdings")
+        ]
+        headers = holding_calls[0][2]["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer test-access-token")
+        self.assertEqual(headers["X-Kiwoom-Account"], "1")
+
+
+class ShinhanSecuritiesTests(unittest.TestCase):
+    def setUp(self):
+        self.transport = FakeTransport()
+        self.client = ShinhanSecuritiesClient(
+            client_id="client-id",
+            client_secret="client-secret",
+            account_seq="1",
+            mode=BrokerMode.READ_ONLY,
+            transport=self.transport,
+            clock=lambda: 1000,
+        )
+
+    def test_token_is_cached_and_account_header_is_added(self):
+        self.client.get_holdings()
+        holding_calls = [
+            call
+            for call in self.transport.requests
+            if call[1].endswith("/api/v1/holdings")
+        ]
+        headers = holding_calls[0][2]["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer test-access-token")
+        self.assertEqual(headers["X-Shinhan-Account"], "1")
+
+
+class NHSecuritiesTests(unittest.TestCase):
+    def setUp(self):
+        self.transport = FakeTransport()
+        self.client = NHSecuritiesClient(
+            client_id="client-id",
+            client_secret="client-secret",
+            account_seq="1",
+            mode=BrokerMode.READ_ONLY,
+            transport=self.transport,
+            clock=lambda: 1000,
+        )
+
+    def test_token_is_cached_and_account_header_is_added(self):
+        self.client.get_holdings()
+        holding_calls = [
+            call
+            for call in self.transport.requests
+            if call[1].endswith("/api/v1/holdings")
+        ]
+        headers = holding_calls[0][2]["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer test-access-token")
+        self.assertEqual(headers["X-NH-Account"], "1")
+
+
+class HanaSecuritiesTests(unittest.TestCase):
+    def setUp(self):
+        self.transport = FakeTransport()
+        self.client = HanaSecuritiesClient(
+            client_id="client-id",
+            client_secret="client-secret",
+            account_seq="1",
+            mode=BrokerMode.READ_ONLY,
+            transport=self.transport,
+            clock=lambda: 1000,
+        )
+
+    def test_token_is_cached_and_account_header_is_added(self):
+        self.client.get_holdings()
+        holding_calls = [
+            call
+            for call in self.transport.requests
+            if call[1].endswith("/api/v1/holdings")
+        ]
+        headers = holding_calls[0][2]["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer test-access-token")
+        self.assertEqual(headers["X-Hana-Account"], "1")
 
 
 class RequestsTransportTests(unittest.TestCase):

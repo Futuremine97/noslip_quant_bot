@@ -372,7 +372,7 @@ def execute_broker_command(command: str, argument: str = "") -> str:
 
     parts = [part for part in re.split(r"[\s,]+", argument.strip()) if part]
     if not parts:
-        raise ValueError("Provider is required: toss, yuanta, or kb")
+        raise ValueError("Provider is required: toss, yuanta, kb, kis, kiwoom, shinhan, nh, or hana")
     provider = parts[0]
     broker = get_broker(provider)
 
@@ -1003,7 +1003,7 @@ def execute_features_summary() -> str:
         "=" * 40,
         "No Slip 봇은 6인의 AI 퀀트 포럼 분석 및 실시간 토론 기능을 지원합니다.",
         "Web3: <code>/credits</code> | <code>/premium</code> | <code>/wallet</code> | <code>/pay</code>",
-        "증권 API: <code>/broker [toss|yuanta|kb]</code> | <code>/quote [provider] [symbols]</code> | <code>/holdings [provider]</code>",
+        "증권 API: <code>/broker [toss|yuanta|kb|kis|kiwoom|shinhan|nh|hana]</code> | <code>/quote [provider] [symbols]</code> | <code>/holdings [provider]</code>",
         "",
         "📊 <b>1. 실시간 주식/크립토 분석</b>",
         "• <b>설명</b>: yfinance 데이터 및 매크로 지표를 기반으로 6인의 AI 에이전트(추세, 가치, 수급, 매크로 등)가 포지션을 산출하여 합의 스탠스 리포트를 제공합니다.",
