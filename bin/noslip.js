@@ -34,6 +34,18 @@ const usage = `
   \x1b[33mprophet\x1b[0m <티커>      Prophet 시계열 예측 엔진을 구동하고 시각화 차트를 출력합니다.
                     \x1b[36m--days <일수>\x1b[0m (기본값: 30)
   \x1b[33mportfolio\x1b[0m         S&P500 가상 자산 포트폴리오의 손익 및 포지션 현황을 출력합니다.
+  \x1b[33mpurpose\x1b[0m           전략·의도를 읽어 가용 자원으로 상담·전략·구축 가이드를 산출합니다.
+                    \x1b[36m--purpose "<전략·의도>"\x1b[0m (필수, 또는 첫 인자로 입력)
+                    \x1b[36m--agent <id>\x1b[0m  특정 AI 에이전트 지정 (기본: claude 우선)
+                    \x1b[36m--squad <id>\x1b[0m  멀티봇 스쿼드로 심화 분석
+                    \x1b[36m--resources\x1b[0m   가용 자원 카탈로그만 출력  \x1b[36m--json\x1b[0m  원본 JSON
+  \x1b[33msquad\x1b[0m [list|run]   멀티봇 스쿼드를 조회/실행합니다.
+                    \x1b[36mnoslip squad run <id> --input "<과제>"\x1b[0m
+  \x1b[33mfederation\x1b[0m        봇들을 묶는 연합 전략을 역제안하고 사람이 승인합니다.
+                    \x1b[36mnoslip federation propose --goal "<목표>"\x1b[0m
+                    \x1b[36mnoslip federation poll <id>\x1b[0m    봇 의견 수집
+                    \x1b[36mnoslip federation approve <id> [--run]\x1b[0m  승인(+자동 실행) → 스쿼드 생성
+                    \x1b[36mnoslip federation run <id> --input "<과제>"\x1b[0m  승인된 연합 실행
   \x1b[33mbroker\x1b[0m [브로커]     연동된 증권사(toss, kb, kis, kiwoom 등)의 API 연결 상태를 진단합니다.
   \x1b[33msetup\x1b[0m [브로커]     증권사 OPEN API 키를 안전하게 .env에 등록하는 대화형 마법사를 실행합니다.
                     \x1b[36mnoslip setup\x1b[0m          → 전체 증권사 선택 메뉴
@@ -48,6 +60,9 @@ const usage = `
   noslip cardnews --topic "블록체인 전망" --lang ja
   noslip portfolio
   noslip broker kb
+  noslip purpose --purpose "AAPL 중심 스윙 전략을 만들고 싶다"
+  noslip purpose --resources
+  noslip squad run research-crew --input "반도체 섹터 진입 시점 분석"
 `;
 
 function sleep(ms) {
@@ -473,12 +488,248 @@ async function main() {
       break;
     }
 
+    case 'purpose': {
+      await runPurpose(args);
+      break;
+    }
+
+    case 'squad': {
+      await runSquad(args);
+      break;
+    }
+
+    case 'federation': {
+      await runFederation(args);
+      break;
+    }
+
     default: {
       console.error(`❌ Unknown command: ${command}`);
       console.log(usage);
       process.exit(1);
     }
   }
+}
+
+// ───────────────────────── Purpose / Squad (Control Plane) ─────────────────────────
+const CP_BASE = process.env.NOSLIP_CONTROL_PLANE || 'http://127.0.0.1:8787';
+
+function getFlag(argv, name) {
+  const i = argv.indexOf(name);
+  return i !== -1 && argv[i + 1] ? argv[i + 1] : null;
+}
+
+async function cpFetch(pathname, options) {
+  try {
+    const res = await fetch(`${CP_BASE}${pathname}`, options);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || `요청 실패 (${res.status})`);
+    return body.data;
+  } catch (e) {
+    if (e.cause && e.cause.code === 'ECONNREFUSED') {
+      console.error(`❌ Control Plane API(${CP_BASE})에 연결할 수 없습니다.`);
+      console.error('   먼저 백엔드를 실행하세요: cd services/control_plane && uvicorn main:app --port 8787');
+      process.exit(1);
+    }
+    throw e;
+  }
+}
+
+async function runPurpose(argv) {
+  // 리소스 카탈로그만 보기
+  if (argv.includes('--resources')) {
+    const cat = await cpFetch('/api/purpose/resources');
+    console.log('\n\x1b[1m\x1b[36m📦 noslip 가용 자원 카탈로그\x1b[0m\n');
+    console.log('\x1b[33m■ 핵심 능력\x1b[0m');
+    cat.capabilities.forEach(c => console.log(`  • ${c.name} — ${c.desc}\n    \x1b[90m${c.cli}\x1b[0m`));
+    if (cat.mcp_servers.length) console.log(`\n\x1b[33m■ MCP 서버\x1b[0m\n  ${cat.mcp_servers.map(m => `${m.name}(${m.transport})`).join(', ')}`);
+    if (cat.agents.length) console.log(`\n\x1b[33m■ 연결된 에이전트\x1b[0m\n  ${cat.agents.map(a => `${a.name}(${a.kind})`).join(', ')}`);
+    if (cat.squads.length) console.log(`\n\x1b[33m■ 스쿼드\x1b[0m\n  ${cat.squads.map(s => `${s.name}[${s.mode}]`).join(', ')}`);
+    process.exit(0);
+  }
+
+  // purpose 텍스트: --purpose "..." 또는 첫 인자
+  let purpose = getFlag(argv, '--purpose');
+  if (!purpose) {
+    const rest = argv.slice(1).filter(a => !a.startsWith('--'));
+    purpose = rest.join(' ').trim();
+  }
+  if (!purpose) {
+    console.error('❌ Error: 전략·의도를 입력하세요.');
+    console.log('   예) noslip purpose --purpose "AAPL 중심 스윙 전략을 만들고 싶다"');
+    console.log('   예) noslip purpose --resources   (가용 자원만 보기)');
+    process.exit(1);
+  }
+
+  const agentId = getFlag(argv, '--agent');
+  const squadId = getFlag(argv, '--squad');
+  const asJson = argv.includes('--json');
+
+  console.log(`\n🎯 Purpose 분석 중… ${squadId ? `(squad: ${squadId})` : agentId ? `(agent: ${agentId})` : '(기본 에이전트)'}`);
+  console.log('\x1b[90m  로컬 AI 에이전트를 실행하므로 수십 초 걸릴 수 있습니다.\x1b[0m');
+
+  const data = await cpFetch('/api/purpose/plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ purpose, agent_id: agentId, squad_id: squadId }),
+  });
+
+  if (asJson) { console.log(JSON.stringify(data, null, 2)); process.exit(0); }
+
+  console.log('\n' + '═'.repeat(60));
+  if (data.mode === 'squad') {
+    if (!data.ok) console.error(`⚠️  ${data.error || '일부 실패'}`);
+    (data.turns || []).forEach(t => {
+      console.log(`\n\x1b[1m\x1b[35m▌${t.bot_name} (${t.role || '역할 미지정'})\x1b[0m`);
+      console.log(t.ok ? t.output : `\x1b[31m[오류] ${t.error}\x1b[0m`);
+      console.log('─'.repeat(60));
+    });
+  } else {
+    if (!data.ok) {
+      console.error(`❌ ${data.error}`);
+      process.exit(1);
+    }
+    console.log(`\x1b[90m엔진: ${data.agent ? data.agent.name : '?'} · ${(data.elapsed_ms / 1000).toFixed(1)}s\x1b[0m\n`);
+    console.log(data.output);
+  }
+  console.log('═'.repeat(60) + '\n');
+  process.exit(0);
+}
+
+async function runSquad(argv) {
+  const sub = argv[1];
+  if (sub === 'list' || !sub) {
+    const squads = await cpFetch('/api/squads');
+    if (!squads.length) { console.log('등록된 스쿼드가 없습니다. (웹: /manage/bots 에서 조립)'); process.exit(0); }
+    console.log('\n\x1b[1m🤖 스쿼드 목록\x1b[0m');
+    squads.forEach(s => console.log(`  • ${s.id}  \x1b[90m[${s.mode}, 봇 ${s.bot_ids.length}개]\x1b[0m ${s.name}`));
+    process.exit(0);
+  }
+  if (sub === 'run') {
+    const squadId = argv[2];
+    const input = getFlag(argv, '--input') || argv.slice(3).filter(a => !a.startsWith('--')).join(' ');
+    if (!squadId || !input) {
+      console.error('❌ 사용법: noslip squad run <squad_id> --input "<과제>"');
+      process.exit(1);
+    }
+    console.log(`\n🤖 스쿼드 '${squadId}' 실행 중…`);
+    const data = await cpFetch(`/api/squads/${squadId}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input }),
+    });
+    console.log('\n' + '═'.repeat(60));
+    (data.turns || []).forEach(t => {
+      console.log(`\n\x1b[1m\x1b[35m▌${t.bot_name} (${t.role || '역할 미지정'})\x1b[0m`);
+      console.log(t.ok ? t.output : `\x1b[31m[오류] ${t.error}\x1b[0m`);
+      console.log('─'.repeat(60));
+    });
+    process.exit(0);
+  }
+  console.error(`❌ 알 수 없는 squad 하위명령: ${sub} (list | run)`);
+  process.exit(1);
+}
+
+const STANCE_LABEL = { agree: '✅ 찬성', conditional: '🟡 조건부', decline: '⛔ 거절', unknown: '⚪ 미상' };
+
+async function runFederation(argv) {
+  const sub = argv[1];
+
+  if (sub === 'propose') {
+    const goal = getFlag(argv, '--goal') || argv.slice(2).filter(a => !a.startsWith('--')).join(' ');
+    if (!goal) {
+      console.error('❌ 사용법: noslip federation propose --goal "<목표>"');
+      process.exit(1);
+    }
+    const agentId = getFlag(argv, '--agent');
+    console.log(`\n🤝 연합 역제안 생성 중… (목표: ${goal})`);
+    console.log('\x1b[90m  AI 오케스트레이터를 실행하므로 수십 초 걸릴 수 있습니다.\x1b[0m');
+    const data = await cpFetch('/api/federation/propose', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal, agent_id: agentId }),
+    });
+    console.log(`\n제안 ${data.proposals.length}건 생성 (오케스트레이터: ${data.agent ? data.agent.name : '?'})\n`);
+    data.proposals.forEach(p => printProposal(p));
+    console.log('\x1b[90m다음: noslip federation poll <id> → noslip federation approve <id>\x1b[0m');
+    process.exit(0);
+  }
+
+  if (sub === 'list' || !sub) {
+    const ps = await cpFetch('/api/federation/proposals');
+    if (!ps.length) { console.log('제안이 없습니다. noslip federation propose --goal "..."'); process.exit(0); }
+    console.log('\n\x1b[1m🤝 연합 제안 목록\x1b[0m');
+    ps.forEach(p => console.log(`  • ${p.id}  [${p.status}]  ${p.name}  \x1b[90m(봇 ${p.member_bot_ids.length}, 모드 ${p.mode})\x1b[0m`));
+    process.exit(0);
+  }
+
+  if (sub === 'poll') {
+    const pid = argv[2];
+    if (!pid) { console.error('❌ 사용법: noslip federation poll <id>'); process.exit(1); }
+    console.log(`\n🗳️  멤버 봇 의견 수집 중… (${pid})`);
+    const data = await cpFetch(`/api/federation/proposals/${pid}/poll`, { method: 'POST' });
+    data.votes.forEach(v => {
+      console.log(`\n\x1b[1m${v.bot_name}\x1b[0m  ${STANCE_LABEL[v.stance] || v.stance}`);
+      console.log(v.comment);
+    });
+    process.exit(0);
+  }
+
+  if (sub === 'approve' || sub === 'reject') {
+    const pid = argv[2];
+    if (!pid) { console.error(`❌ 사용법: noslip federation ${sub} <id>`); process.exit(1); }
+    const autoRun = sub === 'approve' && argv.includes('--run');
+    const runInput = getFlag(argv, '--input');
+    if (autoRun) console.log(`\n✅ 승인 후 자동 실행 중… (수십 초 소요 가능)`);
+    const data = await cpFetch(`/api/federation/proposals/${pid}/decide`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: sub, auto_run: autoRun, input: runInput }),
+    });
+    if (sub === 'approve') {
+      console.log(`\n✅ 승인됨 → 스쿼드 생성: \x1b[36m${data.squad_id}\x1b[0m`);
+      if (data.run) {
+        printRunTurns(data.run.turns);
+      } else {
+        console.log(`   실행: noslip federation run ${pid}  (또는 noslip squad run ${data.squad_id} --input "<과제>")`);
+      }
+    } else {
+      console.log(`\n⛔ 거부됨: ${pid}`);
+    }
+    process.exit(0);
+  }
+
+  if (sub === 'run') {
+    const pid = argv[2];
+    if (!pid) { console.error('❌ 사용법: noslip federation run <id> [--input "<과제>"]'); process.exit(1); }
+    const runInput = getFlag(argv, '--input');
+    console.log(`\n🤝 승인된 연합 실행 중… (${pid})`);
+    const data = await cpFetch(`/api/federation/proposals/${pid}/run`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: runInput }),
+    });
+    printRunTurns(data.turns);
+    process.exit(0);
+  }
+
+  console.error(`❌ 알 수 없는 federation 하위명령: ${sub} (propose | list | poll | approve | reject | run)`);
+  process.exit(1);
+}
+
+function printRunTurns(turns) {
+  console.log('\n' + '═'.repeat(60) + '\n실행 결과');
+  (turns || []).forEach(t => {
+    console.log(`\n\x1b[1m\x1b[35m▌${t.bot_name} (${t.role || '역할 미지정'})\x1b[0m`);
+    console.log(t.ok ? t.output : `\x1b[31m[오류] ${t.error}\x1b[0m`);
+    console.log('─'.repeat(60));
+  });
+}
+
+function printProposal(p) {
+  console.log('─'.repeat(60));
+  console.log(`\x1b[1m\x1b[35m▌${p.name}\x1b[0m  \x1b[90m(${p.id})\x1b[0m`);
+  console.log(`  멤버: ${p.member_bot_ids.join(', ') || '(없음)'}  | 모드: ${p.mode}`);
+  if (p.rationale) console.log(`  근거: ${p.rationale}`);
+  if (p.expected_synergy) console.log(`  시너지: ${p.expected_synergy}`);
+  console.log('');
 }
 
 main().catch(err => {

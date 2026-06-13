@@ -96,3 +96,11 @@ services/trader/scratch_test_alpha.py
 # electron desktop app
 dist-desktop/
 
+
+# Control Plane 런타임 레지스트리
+data/control_plane/
+
+# Control Plane venv / cache
+services/control_plane/.venv/
+services/control_plane/__pycache__/
+**/__pycache__/

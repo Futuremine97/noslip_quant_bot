@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
+const tray = require('./tray');
 
 const PORT = process.env.NOSLIP_PORT || '3000';
 const API_PORT = process.env.NOSLIP_API_PORT || '8787';
@@ -11,6 +12,13 @@ let mainWindow = null;
 let nextProcess = null;
 let apiProcess = null;
 let retryTimer = null;
+let statusTimer = null;
+let targetRoute = '/';
+
+function fullUrl() {
+  const r = targetRoute && targetRoute !== '/' ? targetRoute : '';
+  return DASHBOARD_URL + r;
+}
 
 // App root: unpacked resources when packaged, repo root in development.
 function appRoot() {
@@ -51,7 +59,7 @@ async function connectWhenReady() {
   if (!mainWindow) return;
   if (await probe(DASHBOARD_URL)) {
     if (retryTimer) { clearInterval(retryTimer); retryTimer = null; }
-    mainWindow.loadURL(DASHBOARD_URL);
+    mainWindow.loadURL(fullUrl());
     return;
   }
   mainWindow.loadFile(path.join(__dirname, 'offline.html'));
@@ -60,10 +68,43 @@ async function connectWhenReady() {
       if (mainWindow && (await probe(DASHBOARD_URL))) {
         clearInterval(retryTimer);
         retryTimer = null;
-        mainWindow.loadURL(DASHBOARD_URL);
+        mainWindow.loadURL(fullUrl());
       }
     }, 3000);
   }
+}
+
+// ── 메뉴바(트레이) 연동 ──
+function openRoute(route) {
+  targetRoute = route || '/manage';
+  if (!mainWindow) {
+    createWindow();
+  } else {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    connectWhenReady();
+  }
+}
+
+function restartServices() {
+  if (apiProcess) { try { apiProcess.kill(); } catch (_) { /* noop */ } apiProcess = null; }
+  if (nextProcess) { try { nextProcess.kill(); } catch (_) { /* noop */ } nextProcess = null; }
+  startServices();
+  setTimeout(connectWhenReady, 1500);
+}
+
+async function refreshStatus() {
+  const [dashboard, api] = await Promise.all([
+    probe(DASHBOARD_URL),
+    probe(`http://localhost:${API_PORT}/`),
+  ]);
+  tray.setStatus({ dashboard, api });
+}
+
+function startStatusPolling() {
+  refreshStatus();
+  if (!statusTimer) statusTimer = setInterval(refreshStatus, 5000);
 }
 
 function buildMenu() {
@@ -107,6 +148,8 @@ function createWindow() {
 
 app.on('ready', async () => {
   buildMenu();
+  // 메뉴바(트레이) 앱 생성
+  tray.createTray({ openRoute, restartServices, refreshStatus });
   // If a dev server is already running (dev workflow), just connect to it;
   // otherwise boot the bundled production servers.
   const alreadyRunning = await probe(DASHBOARD_URL);
@@ -114,6 +157,7 @@ app.on('ready', async () => {
     startServices();
   }
   createWindow();
+  startStatusPolling();
 });
 
 app.on('window-all-closed', () => {

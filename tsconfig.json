@@ -33,6 +33,7 @@
   "exclude": [
     "node_modules",
     "contracts",
+    "lib/solana",
     "**/*.test.ts",
     "**/*.test.tsx",
     "app/components/test.tsx"

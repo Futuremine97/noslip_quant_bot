@@ -1,0 +1,10 @@
+.anchor/
+target/
+node_modules/
+test-ledger/
+**/*.rs.bk
+.DS_Store
+# 키페어/시크릿은 절대 커밋 금지
+*.json.key
+id.json
+wallet*.json
