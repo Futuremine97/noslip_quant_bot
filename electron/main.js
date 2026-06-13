@@ -1,14 +1,16 @@
-const { app, BrowserWindow, Menu, shell } = require('electron');
+const { app, BrowserWindow, Menu, shell, ipcMain, screen } = require('electron');
 const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
 const tray = require('./tray');
+const terminals = require('./terminals');
 
 const PORT = process.env.NOSLIP_PORT || '3000';
 const API_PORT = process.env.NOSLIP_API_PORT || '8787';
 const DASHBOARD_URL = process.env.NOSLIP_DASHBOARD_URL || `http://localhost:${PORT}`;
 
 let mainWindow = null;
+let popover = null;
 let nextProcess = null;
 let apiProcess = null;
 let retryTimer = null;
@@ -107,6 +109,55 @@ function startStatusPolling() {
   if (!statusTimer) statusTimer = setInterval(refreshStatus, 5000);
 }
 
+// ── 터미널 통합 팝오버(메뉴바 클릭 시 표시) ──
+function createPopover() {
+  popover = new BrowserWindow({
+    width: 440,
+    height: 580,
+    show: false,
+    frame: false,
+    resizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    movable: false,
+    backgroundColor: '#0b0c16',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-terminals.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  popover.loadFile(path.join(__dirname, 'terminals.html'));
+  popover.on('blur', () => { if (popover && !popover.webContents.isDevToolsOpened()) popover.hide(); });
+}
+
+function togglePopover(bounds) {
+  if (!popover) createPopover();
+  if (popover.isVisible()) { popover.hide(); return; }
+  // 트레이 아이콘 아래 중앙에 배치
+  const { width } = popover.getBounds();
+  let x = Math.round((bounds ? bounds.x + bounds.width / 2 : 0) - width / 2);
+  let y = Math.round(bounds ? bounds.y + bounds.height + 4 : 24);
+  const area = screen.getPrimaryDisplay().workArea;
+  x = Math.max(area.x + 4, Math.min(x, area.x + area.width - width - 4));
+  if (!bounds) x = area.x + area.width - width - 8;
+  popover.setPosition(x, y, false);
+  popover.show();
+  popover.focus();
+  popover.webContents.send('focus'); // 표시 시 갱신 트리거(렌더러 focus 리스너)
+}
+
+function registerTerminalIpc() {
+  ipcMain.handle('terminals:list', () => terminals.listAll());
+  ipcMain.handle('terminals:send', (_e, { item, command }) => terminals.sendCommand(item, command));
+  ipcMain.handle('terminals:focus', (_e, { item }) => terminals.focus(item));
+  ipcMain.handle('terminals:kill', (_e, { item }) => terminals.kill(item));
+  ipcMain.handle('terminals:new', (_e, { kind }) => terminals.newSession(kind));
+  ipcMain.handle('terminals:openDashboard', () => { if (popover) popover.hide(); openRoute('/manage'); });
+  ipcMain.handle('terminals:hide', () => { if (popover) popover.hide(); });
+}
+
 function buildMenu() {
   const isMac = process.platform === 'darwin';
   Menu.setApplicationMenu(Menu.buildFromTemplate([
@@ -148,8 +199,15 @@ function createWindow() {
 
 app.on('ready', async () => {
   buildMenu();
-  // 메뉴바(트레이) 앱 생성
-  tray.createTray({ openRoute, restartServices, refreshStatus });
+  registerTerminalIpc();
+  createPopover();
+  // 메뉴바(트레이) 앱 생성 — 좌클릭: 터미널 팝오버, 우클릭: 메뉴
+  tray.createTray({
+    onClick: (bounds) => togglePopover(bounds),
+    openRoute,
+    restartServices,
+    refreshStatus,
+  });
   // If a dev server is already running (dev workflow), just connect to it;
   // otherwise boot the bundled production servers.
   const alreadyRunning = await probe(DASHBOARD_URL);

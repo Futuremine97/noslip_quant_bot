@@ -33,7 +33,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 try:
     import google.generativeai as genai
@@ -392,12 +392,21 @@ def get_font_by_lang(size: int, index: int = 0, lang: str = "ko"):
     
     # Try Japanese specific fonts first if lang is ja
     if lang in ["ja", "jp"]:
-        candidates = [
-            "/System/Library/Fonts/Hiragino Sans W3.ttc",
-            "/System/Library/Fonts/ヒラギノ角ゴ ProN W3.otf",
-            "/System/Library/Fonts/MS Gothic.ttf",
+        candidates = []
+        if os.path.exists("/System/Library/Fonts"):
+            try:
+                for f in os.listdir("/System/Library/Fonts"):
+                    if "ヒラ" in f and "角" in f:
+                        candidates.append(os.path.join("/System/Library/Fonts", f))
+            except:
+                pass
+        candidates.extend([
+            "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+            "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/Supplemental/NotoSansGothic-Regular.ttf",
             "/System/Library/Fonts/Osaka.ttf"
-        ]
+        ])
         for path in candidates:
             if os.path.exists(path):
                 try:
@@ -512,25 +521,126 @@ def wrap_text_chars(text, font, max_width, draw):
         lines.append(current_line)
     return lines
 
-def create_pillow_slide(bg_img, slide_num, total_slides, title, subtitle, bullets, is_cover=False, lang="ko"):
-    """Assemble a single custom theme slide with glassmorphic panel."""
-    # Check if bg is peach (which is light)
-    is_light = (bg_img.getpixel((0,0))[0] > 200)
+
+def blend_color_match(mascot_img, bg_img, x, y):
+    mw, mh = mascot_img.size
+    bg_w, bg_h = bg_img.size
     
-    color_text = (45, 36, 32, 255) if is_light else (245, 245, 245, 255)
-    color_sub = (226, 110, 80, 255) if is_light else (0, 245, 212, 255)
-    color_muted = (115, 102, 95, 255) if is_light else (156, 163, 175, 255)
-    panel_fill = (255, 253, 251, 225) if is_light else (17, 17, 17, 210)
-    panel_border = (226, 110, 80, 40) if is_light else (255, 255, 255, 30)
+    # Ensure crop area is within background bounds
+    x1 = max(0, min(x, bg_w - 1))
+    y1 = max(0, min(y, bg_h - 1))
+    x2 = max(0, min(x + mw, bg_w))
+    y2 = max(0, min(y + mh, bg_h))
+    
+    if x2 <= x1 or y2 <= y1:
+        return mascot_img
+        
+    bg_crop = bg_img.crop((x1, y1, x2, y2)).resize((mw, mh))
+    mascot_rgba = mascot_img.convert("RGBA")
+    
+    # Calculate average color to tint the mascot
+    avg_bg = bg_crop.resize((1, 1)).resize((mw, mh))
+    
+    # Split channels
+    mr, mg, mb, ma = mascot_rgba.split()
+    ar, ag, ab, aa = avg_bg.convert("RGBA").split()
+    
+    # 8% tint of background average color to match environment mood/lighting
+    tint_factor = 0.08
+    tinted_r = Image.blend(mr, ar, tint_factor)
+    tinted_g = Image.blend(mg, ag, tint_factor)
+    tinted_b = Image.blend(mb, ab, tint_factor)
+    
+    tinted_mascot = Image.merge("RGBA", (tinted_r, tinted_g, tinted_b, ma))
+    
+    # Calculate relative luminance of background to match brightness
+    avg_pixel = bg_crop.resize((1, 1)).getpixel((0, 0))
+    r, g, b = avg_pixel[:3]
+    luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+    
+    # Map luminance to brightness enhancement
+    # Darker background -> slightly darker mascot; brighter background -> brighter mascot
+    brightness_mult = 0.82 + (luminance * 0.36)  # Range ~ [0.82, 1.18]
+    enhancer = ImageEnhance.Brightness(tinted_mascot)
+    tinted_mascot = enhancer.enhance(brightness_mult)
+    
+    return tinted_mascot
+
+
+def create_pillow_slide(bg_img, slide_num, total_slides, title, subtitle, bullets, is_cover=False, lang="ko"):
+    """Assemble a single custom theme slide with dynamic experimental layout and glassmorphic panel."""
+    # A dark panel with white text works best on photo backgrounds to guarantee readability!
+    is_light = False
+    
+    color_text = (245, 245, 245, 255)
+    color_sub = (0, 245, 212, 255)
+    color_muted = (156, 163, 175, 255)
+    panel_fill = (15, 20, 25, 210) # dark blue-gray translucent
+    panel_border = (255, 255, 255, 35)
     
     overlay = Image.new("RGBA", (1080, 1080), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     
-    # 1. Translucent Panel
-    card_left, card_top = 80, 120
-    card_right, card_bottom = 1080 - 80, 1080 - 120
-    card_width = card_right - card_left
+    # Load mascot details
+    from pathlib import Path
+    mascot_dir = Path("/Users/sunghoon/.gemini/antigravity/scratch/no-slip-saas/data/mascot_poses")
+    mascot_list = [
+        "mascot_joyful.png",
+        "mascot_smart_pointing.png",
+        "mascot_explaining.png",
+        "mascot_coffee_desk.png",
+        "mascot_two_talking.png",
+        "mascot_coffee_phone.png",
+        "mascot_group_circle.png",
+        "mascot_worried.png",
+        "mascot_scared_running.png",
+        "mascot_joyful.png"
+    ]
+    m_idx = (slide_num - 1) % len(mascot_list)
+    mascot_name = mascot_list[m_idx]
+    mascot_path = mascot_dir / mascot_name
+    has_mascot = mascot_path.exists()
     
+    # Experimental layout coordinates based on slide_num
+    layout_type = slide_num % 4
+    
+    if is_cover:
+        # Cover layout: Left half is text panel, right half is huge mascot (split screen)
+        card_left, card_top = 80, 160
+        card_right, card_bottom = 600, 920
+        mascot_scale = 340
+        mascot_x = 640
+        mascot_y = 440
+    elif layout_type == 1:
+        # Right aligned panel, mascot on the left pointing
+        card_left, card_top = 480, 120
+        card_right, card_bottom = 1000, 960
+        mascot_scale = 280
+        mascot_x = 90
+        mascot_y = 420
+    elif layout_type == 2:
+        # Left aligned panel, mascot on the right
+        card_left, card_top = 80, 120
+        card_right, card_bottom = 620, 960
+        mascot_scale = 280
+        mascot_x = 680
+        mascot_y = 420
+    elif layout_type == 3:
+        # Top panel, mascot at the bottom center
+        card_left, card_top = 80, 100
+        card_right, card_bottom = 1000, 720
+        mascot_scale = 260
+        mascot_x = 410
+        mascot_y = 740
+    else:
+        # Centered panel, mascot overlapping bottom right
+        card_left, card_top = 80, 120
+        card_right, card_bottom = 1000, 960
+        mascot_scale = 260
+        mascot_x = 720
+        mascot_y = 660
+
+    # Draw experimental translucent panel
     draw.rounded_rectangle(
         [card_left, card_top, card_right, card_bottom],
         radius=28,
@@ -540,68 +650,111 @@ def create_pillow_slide(bg_img, slide_num, total_slides, title, subtitle, bullet
     )
     
     # Fonts
-    font_bold = get_font_by_lang(52, index=6, lang=lang)
-    font_medium = get_font_by_lang(28, index=2, lang=lang)
-    font_regular = get_font_by_lang(23, index=0, lang=lang)
-    font_semibold = get_font_by_lang(22, index=4, lang=lang)
+    font_bold = get_font_by_lang(44, index=6, lang=lang) # slightly smaller for smaller panels
+    font_medium = get_font_by_lang(25, index=2, lang=lang)
+    font_regular = get_font_by_lang(21, index=0, lang=lang)
+    font_semibold = get_font_by_lang(20, index=4, lang=lang)
     
     # 2. Side accent line
     draw.rounded_rectangle(
-        [card_left + 50, card_top + 60, card_left + 58, card_top + 140],
-        radius=4,
+        [card_left + 35, card_top + 45, card_left + 41, card_top + 115],
+        radius=3,
         fill=color_sub
     )
     
     # 3. Title & Subtitle
-    title_x = card_left + 80
-    title_y = card_top + 55
+    title_x = card_left + 65
+    title_y = card_top + 40
     draw.text((title_x, title_y), title, font=font_bold, fill=color_text)
-    draw.text((title_x, title_y + 70), subtitle, font=font_medium, fill=color_sub)
+    draw.text((title_x, title_y + 55), subtitle, font=font_medium, fill=color_sub)
     
     # Divider
-    divider_y = title_y + 125
-    draw.line([(card_left + 50, divider_y), (card_right - 50, divider_y)], fill=panel_border, width=1)
+    divider_y = title_y + 105
+    draw.line([(card_left + 35, divider_y), (card_right - 35, divider_y)], fill=panel_border, width=1)
     
     # 4. Body content
-    body_y = divider_y + 45
-    content_width = card_width - 100
+    body_y = divider_y + 35
+    content_width = (card_right - card_left) - 90
     
     if is_cover:
-        body_y = divider_y + 80
+        body_y = divider_y + 70
         for line in bullets:
             wrapped = wrap_text_chars(line, font_medium, content_width, draw)
             for wl in wrapped:
                 bbox = draw.textbbox((0, 0), wl, font=font_medium)
                 text_w = bbox[2] - bbox[0]
-                draw.text((1080 // 2 - text_w // 2, body_y), wl, font=font_medium, fill=color_text)
-                body_y += 48
-            body_y += 18
+                panel_center = card_left + (card_right - card_left) // 2
+                draw.text((panel_center - text_w // 2, body_y), wl, font=font_medium, fill=color_text)
+                body_y += 42
+            body_y += 15
     else:
         for bullet in bullets:
-            wrapped = wrap_text_chars(bullet, font_regular, content_width - 30, draw)
+            wrapped = wrap_text_chars(bullet, font_regular, content_width - 35, draw)
             for i, wl in enumerate(wrapped):
                 if i == 0:
-                    draw.text((card_left + 50, body_y), "•", font=font_regular, fill=color_sub)
-                    draw.text((card_left + 80, body_y), wl, font=font_regular, fill=color_text)
+                    draw.text((card_left + 35, body_y), "•", font=font_regular, fill=color_sub)
+                    draw.text((card_left + 60, body_y), wl, font=font_regular, fill=color_text)
                 else:
-                    draw.text((card_left + 80, body_y), wl, font=font_regular, fill=color_text)
-                body_y += 38
-            body_y += 18
+                    draw.text((card_left + 60, body_y), wl, font=font_regular, fill=color_text)
+                body_y += 34
+            body_y += 15
+            
+    # Paste Mascot Character if present
+    if has_mascot:
+        try:
+            mascot_img = Image.open(mascot_path).convert("RGBA")
+            w, h = mascot_img.size
+            if w > h:
+                new_w = mascot_scale
+                new_h = int(h * (mascot_scale / w))
+            else:
+                new_h = mascot_scale
+                new_w = int(w * (mascot_scale / h))
+            mascot_img = mascot_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            
+            # Blend mascot colors & brightness with environment background
+            mascot_img = blend_color_match(mascot_img, bg_img, mascot_x, mascot_y)
+            
+            # Generate drop shadow offset to integrate it in the 3D space
+            shadow = Image.new("RGBA", mascot_img.size, (0, 0, 0, 0))
+            mascot_alpha = mascot_img.split()[3]
+            solid_shadow = Image.new("RGBA", mascot_img.size, (12, 15, 20, 160))
+            shadow.paste(solid_shadow, (0, 0), mask=mascot_alpha)
+            shadow = shadow.filter(ImageFilter.GaussianBlur(15))
+            
+            # Floor contact shadow (flat oval) to anchor the character to surfaces
+            mw, mh = mascot_img.size
+            shadow_w = int(mw * 0.9)
+            shadow_h = int(mh * 0.14)
+            contact_shadow = Image.new("RGBA", (shadow_w, shadow_h), (0, 0, 0, 0))
+            cs_draw = ImageDraw.Draw(contact_shadow)
+            cs_draw.ellipse([0, 0, shadow_w, shadow_h], fill=(8, 10, 12, 190))
+            contact_shadow = contact_shadow.filter(ImageFilter.GaussianBlur(10))
+            
+            # Paste drop shadow and contact shadow
+            overlay.paste(shadow, (mascot_x + 10, mascot_y + 12), shadow)
+            if mascot_y + mh < 1070:
+                overlay.paste(contact_shadow, (mascot_x + (mw - shadow_w)//2, mascot_y + mh - shadow_h//2), contact_shadow)
+            
+            # Paste the blended mascot
+            overlay.paste(mascot_img, (mascot_x, mascot_y), mascot_img)
+        except Exception as e:
+            print(f"⚠️ Failed to load or paste mascot: {e}")
             
     # 5. Footer Info
-    footer_y = card_bottom - 60
-    draw.text((card_left + 50, footer_y), "NO SLIP AUTOMATION" if lang in ["ja", "jp"] else "노슬립 퀀트 자동화", font=font_semibold, fill=color_muted)
+    footer_y = card_bottom - 50
+    draw.text((card_left + 35, footer_y), "NO SLIP AUTOMATION" if lang in ["ja", "jp"] else "노슬립 퀀트 자동화", font=font_semibold, fill=color_muted)
     
     page_str = f"{slide_num:02d} / {total_slides:02d}"
     bbox = draw.textbbox((0, 0), page_str, font=font_semibold)
     page_w = bbox[2] - bbox[0]
-    draw.text((card_right - 50 - page_w, footer_y), page_str, font=font_semibold, fill=color_muted)
+    draw.text((card_right - 35 - page_w, footer_y), page_str, font=font_semibold, fill=color_muted)
     
     # Composite overlay on background
     final_img = Image.alpha_composite(bg_img.convert("RGBA"), overlay)
     return final_img.convert("RGB")
 
-def generate_topic_cardnews_data(topic: str, lang: str = "ko") -> list[dict] | None:
+def generate_topic_cardnews_data(topic: str, lang: str = "ko", num_slides: int = 5) -> list[dict] | None:
     """Generate 5 cardnews slide data structures based on custom topic using Gemini."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -618,14 +771,14 @@ def generate_topic_cardnews_data(topic: str, lang: str = "ko") -> list[dict] | N
     
     prompt = f"""
 You are a highly skilled infographic content writer and graphic designer.
-Create a structured 5-slide cardnews text content for the given topic in "{target_lang}" language.
+Create a structured {num_slides}-slide cardnews text content for the given topic in "{target_lang}" language.
 
 Topic: "{topic}"
 
 [Guidelines]
-1. Generate exactly 5 slides.
+1. Generate exactly {num_slides} slides.
 2. Slide 1 (index 0) must act as a Cover with summary intro lines in "bullets".
-3. Slides 2-5 must cover 4 distinct key subtopics.
+3. Slides 2-{num_slides} must cover {num_slides - 1} distinct key subtopics.
 4. Each slide must contain:
    - "title": A short catchy slide title (max 20 chars).
    - "subtitle": Subtitle expanding the title (max 35 chars).
@@ -668,7 +821,8 @@ Topic: "{topic}"
 
 def generate_card_news(demo: bool = False, outdir: str | None = None,
                        send: bool = True, instagram: bool = False,
-                       topic: str | None = None, lang: str = "ko") -> list[str]:
+                       topic: str | None = None, lang: str = "ko",
+                       num_slides: int = 5) -> list[str]:
     from dotenv import load_dotenv
     load_dotenv(ROOT_DIR / ".env")
     setup_korean_font()
@@ -685,13 +839,13 @@ def generate_card_news(demo: bool = False, outdir: str | None = None,
 
     if topic:
         print(f"📡 1/3 Generating topic content for '{topic}' in language '{lang}' via Gemini...")
-        topic_data = generate_topic_cardnews_data(topic, lang)
-        if not topic_data or len(topic_data) < 5:
+        topic_data = generate_topic_cardnews_data(topic, lang, num_slides)
+        if not topic_data or len(topic_data) < num_slides:
             raise RuntimeError("Failed to generate custom topic cardnews data from Gemini.")
             
         print("🎨 2/3 Rendering cards via custom Pillow vector theme drawers...")
         paths = []
-        total = 5
+        total = num_slides
         
         theme_map = {
             "dark_cyber": build_theme_cyber,
@@ -699,12 +853,25 @@ def generate_card_news(demo: bool = False, outdir: str | None = None,
             "warm_peach": build_theme_peach
         }
         
-        for idx, slide in enumerate(topic_data[:5]):
+        for idx, slide in enumerate(topic_data[:num_slides]):
             slide_num = idx + 1
-            theme_name = slide.get("theme", "dark_cyber")
-            bg_builder = theme_map.get(theme_name, build_theme_cyber)
             
-            bg_img = bg_builder()
+            # Check if there is a custom background photo for this slide
+            bg_photo_path = Path("/Users/sunghoon/.gemini/antigravity/scratch/no-slip-saas/data/card_news/backgrounds") / f"bg_{slide_num:02d}.png"
+            if bg_photo_path.exists():
+                try:
+                    bg_img = Image.open(bg_photo_path).convert("RGBA").resize((1080, 1080))
+                    print(f"   📸 Loaded realistic background: {bg_photo_path}")
+                    theme_name = "photo_bg"
+                except Exception as e:
+                    print(f"   ⚠️ Failed to load background photo: {e}")
+                    theme_name = slide.get("theme", "dark_cyber")
+                    bg_builder = theme_map.get(theme_name, build_theme_cyber)
+                    bg_img = bg_builder()
+            else:
+                theme_name = slide.get("theme", "dark_cyber")
+                bg_builder = theme_map.get(theme_name, build_theme_cyber)
+                bg_img = bg_builder()
             
             slide_img = create_pillow_slide(
                 bg_img=bg_img,
@@ -773,11 +940,13 @@ def main():
     parser.add_argument("--outdir", default=None, help="Output directory override")
     parser.add_argument("--topic", default=None, help="Generate custom topic cardnews")
     parser.add_argument("--lang", default="ko", help="Output language code (ko, ja, jp)")
+    parser.add_argument("--num-slides", type=int, default=5, help="Number of slides to generate")
     args = parser.parse_args()
     try:
         paths = generate_card_news(demo=args.demo, outdir=args.outdir,
                                    send=not args.no_send, instagram=args.instagram,
-                                   topic=args.topic, lang=args.lang)
+                                   topic=args.topic, lang=args.lang,
+                                   num_slides=args.num_slides)
         print(json.dumps({"cards": paths}, ensure_ascii=False))
     except Exception as e:
         print(f"❌ Card news pipeline failed: {e}")

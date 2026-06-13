@@ -8,7 +8,9 @@ const NAV = [
   { href: "/manage/purpose", label: "Purpose", icon: TargetIcon },
   { href: "/manage/bots", label: "멀티봇", icon: BotsIcon },
   { href: "/manage/federation", label: "연합", icon: FederationIcon },
+  { href: "/manage/token", label: "토큰화", icon: TokenIcon },
   { href: "/manage/chat", label: "채팅", icon: ChatIcon },
+  { href: "/manage/companion", label: "동반", icon: CompanionIcon },
   { href: "/manage/mcp", label: "MCP 서버", icon: PuzzleIcon },
   { href: "/manage/connectors", label: "커넥터", icon: PlugIcon, soon: true },
   { href: "/manage/skills", label: "Skill", icon: SparkIcon, soon: true },
@@ -102,6 +104,14 @@ function PlugIcon({ className }: IconProps) {
     </svg>
   );
 }
+function TokenIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.5 9.5a2.5 2.5 0 0 1 2.5-1.5c1.4 0 2.5.9 2.5 2s-1 1.6-2.5 2-2.5 1-2.5 2 1.1 2 2.5 2a2.5 2.5 0 0 0 2.5-1.5M12 6.5v1.5M12 16v1.5" />
+    </svg>
+  );
+}
 function FederationIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -133,6 +143,14 @@ function ChatIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 11.5a8.38 8.38 0 0 1-9 8.4 9 9 0 0 1-4-1L3 20l1.1-4A8.38 8.38 0 0 1 3 11.5 8.5 8.5 0 0 1 21 11.5Z" />
+    </svg>
+  );
+}
+function CompanionIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.5 9h.01M14.5 9h.01M9 14s1 1.5 3 1.5 3-1.5 3-1.5" />
+      <path d="M12 2a7 7 0 0 0-7 7v3l-1.5 3A1 1 0 0 0 4.4 16H6v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2h1.6a1 1 0 0 0 .9-1.5L19 12V9a7 7 0 0 0-7-7Z" />
     </svg>
   );
 }

@@ -354,6 +354,7 @@ function ConnectPanel({
   const [command, setCommand] = useState(PRESETS.claude.command);
   const [args, setArgs] = useState(PRESETS.claude.args);
   const [promptMode, setPromptMode] = useState<"arg" | "stdin">("arg");
+  const [local, setLocal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -382,6 +383,7 @@ function ConnectPanel({
           command,
           args: args.split(" ").map((a) => a.trim()).filter(Boolean),
           prompt_mode: promptMode,
+          local,
         }),
       });
       onDone();
@@ -463,6 +465,17 @@ function ConnectPanel({
               ))}
             </div>
           </Labeled>
+          <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={local}
+              onChange={(e) => setLocal(e.target.checked)}
+              className="accent-violet-500"
+            />
+            <span className="text-sm text-gray-300">
+              로컬 모델 (동반 기능에서 우선 선택)
+            </span>
+          </label>
           <p className="rounded-lg bg-white/[0.03] px-3 py-2 text-xs leading-relaxed text-gray-500">
             로컬에 해당 CLI가 설치되어 있고 로그인된 상태여야 합니다. 등록 후
             카드의 &lsquo;연결 점검&rsquo;으로 실행 가능 여부를 확인하세요.

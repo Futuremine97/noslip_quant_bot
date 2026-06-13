@@ -45,17 +45,24 @@ def build_prompt(purpose: str, catalog_text: str, role_prompt: str = "") -> str:
     return "\n".join(parts)
 
 
-def _pick_agent(agent_id: Optional[str]) -> Optional[ChatAgent]:
+def _pick_agent(agent_id: Optional[str], prefer_local: bool = False) -> Optional[ChatAgent]:
     agents = chat_registry.list_agents()
     if agent_id:
         return next((a for a in agents if a.id == agent_id), None)
-    # claude 우선 → enabled 첫 번째
     enabled = [a for a in agents if a.enabled]
+    if not enabled:
+        return None
+    # 로컬 우선 옵션: local 플래그가 켜진 에이전트를 먼저 선택
+    if prefer_local:
+        local_agents = [a for a in enabled if getattr(a, "local", False)]
+        if local_agents:
+            return local_agents[0]
+    # 기본 우선순위: claude → codex → antigravity → 첫 번째
     for kind in ("claude", "codex", "antigravity"):
         for a in enabled:
             if a.kind == kind:
                 return a
-    return enabled[0] if enabled else None
+    return enabled[0]
 
 
 def prepare(purpose: str, agent_id: Optional[str] = None) -> dict:

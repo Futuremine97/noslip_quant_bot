@@ -29,6 +29,10 @@ function buildMenu() {
     { label: `${dot(api)} 컨트롤 플레인  ${api ? '실행 중' : '꺼짐'} (:8787)`, enabled: false },
     { type: 'separator' },
     {
+      label: '📟 터미널 통합 보기',
+      click: () => handlers.onClick && handlers.onClick(tray ? tray.getBounds() : null),
+    },
+    {
       label: '대시보드 열기',
       accelerator: 'CmdOrCtrl+D',
       click: () => handlers.openRoute && handlers.openRoute('/manage'),
@@ -61,7 +65,7 @@ function buildMenu() {
 
 function refreshMenu() {
   if (!tray) return;
-  tray.setContextMenu(buildMenu());
+  // setContextMenu를 쓰지 않는다(좌클릭이 메뉴에 묶이는 것 방지). 메뉴는 right-click 시 빌드.
   tray.setToolTip(
     `NoSlip Quant — 대시보드 ${lastStatus.dashboard ? 'ON' : 'OFF'} / API ${lastStatus.api ? 'ON' : 'OFF'}`,
   );
@@ -73,9 +77,12 @@ function createTray(h) {
   const image = nativeImage.createFromPath(iconPath);
   image.setTemplateImage(true); // macOS 다크/라이트 메뉴바 자동 대응
   tray = new Tray(image);
-  // 좌클릭 시 대시보드 바로 열기(메뉴는 우클릭/클릭 모두 표시)
-  tray.on('click', () => handlers.openRoute && handlers.openRoute('/manage'));
-  refreshMenu();
+  // 좌클릭: 터미널 통합 팝오버 토글, 우클릭: 컨텍스트 메뉴
+  tray.on('click', (_e, bounds) => {
+    if (handlers.onClick) handlers.onClick(bounds);
+  });
+  tray.on('right-click', () => tray.popUpContextMenu(buildMenu()));
+  tray.setToolTip('NoSlip Quant');
   return tray;
 }
 

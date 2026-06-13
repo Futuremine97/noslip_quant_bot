@@ -19,12 +19,14 @@ from fastapi.responses import StreamingResponse
 try:  # 패키지로 실행될 때
     from . import (
         chat_registry,
+        companion,
         federation,
         purpose_engine,
         registry,
         resource_catalog,
         squad_registry,
         squad_runner,
+        tokenization,
     )
     from .agent_runner import check_agent, run_agent, stream_run
     from .models import (
@@ -41,12 +43,14 @@ try:  # 패키지로 실행될 때
     from .mcp_probe import probe
 except ImportError:  # uvicorn main:app 처럼 단독 실행될 때
     import chat_registry  # type: ignore
+    import companion  # type: ignore
     import federation  # type: ignore
     import purpose_engine  # type: ignore
     import registry  # type: ignore
     import resource_catalog  # type: ignore
     import squad_registry  # type: ignore
     import squad_runner  # type: ignore
+    import tokenization  # type: ignore
     from agent_runner import check_agent, run_agent, stream_run  # type: ignore
     from models import (  # type: ignore
         AGENT_PRESETS,
@@ -222,6 +226,7 @@ def chat_send(req: ChatSendRequest):
         req.message,
         [t.model_dump() for t in req.history],
     )
+    tokenization.meter("agent_run")
     return _envelope(result)
 
 
@@ -242,6 +247,7 @@ def chat_stream(req: ChatSendRequest):
     if not agent.enabled:
         raise HTTPException(status_code=400, detail="비활성화된 에이전트입니다.")
     history = [t.model_dump() for t in req.history]
+    tokenization.meter("agent_run")
     return StreamingResponse(
         _sse(stream_run(agent, req.message, history)),
         media_type="text/event-stream",
@@ -318,6 +324,7 @@ def run_squad(squad_id: str, req: SquadRunRequest):
     result = squad_runner.run_squad(squad_id, req.input)
     if result.get("error") == "스쿼드를 찾을 수 없습니다.":
         raise HTTPException(status_code=404, detail=result["error"])
+    tokenization.meter("squad_run_per_bot", max(1, len(result.get("turns", []))))
     return _envelope(result)
 
 
@@ -338,8 +345,10 @@ def purpose_plan(req: PurposeRequest):
     # 스쿼드 지정 시 멀티봇 pipeline으로 심화, 아니면 단일 에이전트
     if req.squad_id:
         result = squad_runner.run_squad(req.squad_id, req.purpose)
+        tokenization.meter("squad_run_per_bot", max(1, len(result.get("turns", []))))
         return _envelope({"mode": "squad", **result})
     result = purpose_engine.plan(req.purpose, agent_id=req.agent_id)
+    tokenization.meter("purpose_plan")
     return _envelope({"mode": "single", **result})
 
 
@@ -355,6 +364,7 @@ def purpose_stream(req: PurposeRequest):
         yield {"type": "meta", "agent": {"id": agent.id, "name": agent.name, "kind": agent.kind}}
         yield from stream_run(agent, prep["prompt"], [])
 
+    tokenization.meter("purpose_plan")
     return StreamingResponse(_sse(events()), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
@@ -385,6 +395,7 @@ def federation_propose(req: ProposeRequest):
     result = federation.propose(req.goal, agent_id=req.agent_id, count=req.count)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["error"])
+    tokenization.meter("federation_propose")
     return _envelope(result)
 
 
@@ -411,6 +422,7 @@ def federation_run(pid: str, req: FederationRunRequest):
     result = federation.run_approved(pid, req.input)
     if not result["ok"] and result.get("error") in ("제안을 찾을 수 없습니다.",):
         raise HTTPException(status_code=404, detail=result["error"])
+    tokenization.meter("federation_run_per_bot", max(1, len(result.get("turns", []))))
     return _envelope(result)
 
 
@@ -419,3 +431,87 @@ def federation_delete(pid: str):
     if not federation.delete_proposal(pid):
         raise HTTPException(status_code=404, detail="제안을 찾을 수 없습니다.")
     return _envelope({"deleted": pid})
+
+
+# ───────────────────────────── 동반 에이전트(역질문) ─────────────────────────────
+class CompanionRequest(BaseModel):
+    history: list[ChatTurn] = []
+    agent_id: Optional[str] = None
+
+
+@app.post("/api/companion/nudge")
+def companion_nudge(req: CompanionRequest):
+    result = companion.nudge([t.model_dump() for t in req.history], req.agent_id)
+    if result.get("ok"):
+        tokenization.meter("companion_nudge")
+    return _envelope(result)
+
+
+class CompanionSettings(BaseModel):
+    enabled: Optional[bool] = None
+    idle_seconds: Optional[int] = None
+    prefer_local: Optional[bool] = None
+
+
+@app.get("/api/companion/settings")
+def companion_get_settings():
+    return _envelope(companion.get_settings())
+
+
+@app.put("/api/companion/settings")
+def companion_put_settings(patch: CompanionSettings):
+    return _envelope(companion.update_settings(patch.model_dump(exclude_unset=True)))
+
+
+@app.get("/api/companion/log")
+def companion_get_log(limit: int = 30):
+    return _envelope(companion.get_log(limit))
+
+
+# ───────────────────────────── 토큰화(사용량 → NSQ) ─────────────────────────────
+@app.get("/api/token/config")
+def token_get_config():
+    return _envelope(tokenization.get_config())
+
+
+class TokenConfigPatch(BaseModel):
+    nsq_per_unit: Optional[float] = None
+    initial_grant: Optional[float] = None
+    actions: Optional[dict] = None
+
+
+@app.put("/api/token/config")
+def token_put_config(patch: TokenConfigPatch):
+    return _envelope(tokenization.update_config(patch.model_dump(exclude_unset=True)))
+
+
+@app.get("/api/token/account")
+def token_account(account: str = "default", limit: int = 40):
+    return _envelope(tokenization.get_account(account, limit))
+
+
+@app.get("/api/token/usage")
+def token_usage(account: str = "default"):
+    return _envelope(tokenization.usage_summary(account))
+
+
+class TokenGrant(BaseModel):
+    account: str = "default"
+    amount: float
+    note: str = ""
+
+
+@app.post("/api/token/grant")
+def token_grant(req: TokenGrant):
+    return _envelope(tokenization.grant(req.account, req.amount, req.note))
+
+
+class TokenCharge(BaseModel):
+    account: str = "default"
+    action: str
+    qty: int = 1
+
+
+@app.post("/api/token/charge")
+def token_charge(req: TokenCharge):
+    return _envelope(tokenization.charge(req.account, req.action, req.qty))

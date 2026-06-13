@@ -46,6 +46,10 @@ const usage = `
                     \x1b[36mnoslip federation poll <id>\x1b[0m    봇 의견 수집
                     \x1b[36mnoslip federation approve <id> [--run]\x1b[0m  승인(+자동 실행) → 스쿼드 생성
                     \x1b[36mnoslip federation run <id> --input "<과제>"\x1b[0m  승인된 연합 실행
+  \x1b[33mcompanion\x1b[0m         대화형 동반 모드. 입력이 없으면 에이전트가 먼저 역질문을 던집니다.
+                    \x1b[36m--idle <초>\x1b[0m (기본 45)   \x1b[36m--agent <id>\x1b[0m
+  \x1b[33mtoken\x1b[0m [balance|...]  사용량 토큰화(NSQ) 잔액·원장·요금표를 봅니다.
+                    \x1b[36mnoslip token balance | grant <NSQ> | usage | config\x1b[0m
   \x1b[33mbroker\x1b[0m [브로커]     연동된 증권사(toss, kb, kis, kiwoom 등)의 API 연결 상태를 진단합니다.
   \x1b[33msetup\x1b[0m [브로커]     증권사 OPEN API 키를 안전하게 .env에 등록하는 대화형 마법사를 실행합니다.
                     \x1b[36mnoslip setup\x1b[0m          → 전체 증권사 선택 메뉴
@@ -503,6 +507,16 @@ async function main() {
       break;
     }
 
+    case 'companion': {
+      await runCompanion(args);
+      break;
+    }
+
+    case 'token': {
+      await runToken(args);
+      break;
+    }
+
     default: {
       console.error(`❌ Unknown command: ${command}`);
       console.log(usage);
@@ -730,6 +744,197 @@ function printProposal(p) {
   if (p.rationale) console.log(`  근거: ${p.rationale}`);
   if (p.expected_synergy) console.log(`  시너지: ${p.expected_synergy}`);
   console.log('');
+}
+
+// ───────────────────────── Companion (유휴 시 역질문) ─────────────────────────
+async function cpStream(pathname, body, onEvent) {
+  const res = await fetch(`${CP_BASE}${pathname}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!res.ok || !res.body) {
+    const b = await res.json().catch(() => ({}));
+    throw new Error(b.detail || `요청 실패 (${res.status})`);
+  }
+  let buf = '';
+  for await (const chunk of res.body) {
+    buf += Buffer.from(chunk).toString('utf8');
+    const parts = buf.split('\n\n');
+    buf = parts.pop() || '';
+    for (const part of parts) {
+      const dataLine = part.split('\n').find((l) => l.startsWith('data:'));
+      if (!dataLine) continue;
+      let ev;
+      try { ev = JSON.parse(dataLine.slice(5).trim()); } catch (_) { continue; }
+      onEvent(ev);
+    }
+  }
+}
+
+function spinner(prefix) {
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let i = 0;
+  const t = setInterval(() => {
+    process.stdout.write(`\r${prefix}${frames[i++ % frames.length]} `);
+  }, 90);
+  return () => { clearInterval(t); process.stdout.write('\r\x1b[K'); };
+}
+
+async function runCompanion(argv) {
+  const idleOverride = getFlag(argv, '--idle');
+  let agentId = getFlag(argv, '--agent');
+
+  // 동반 설정(켜짐/유휴초/로컬우선) — GUI에서 언제든 바뀔 수 있어 실행 중 주기적으로 재확인
+  async function fetchSettings() {
+    try { return await cpFetch('/api/companion/settings'); }
+    catch (_) { return { enabled: true, idle_seconds: 45, prefer_local: true }; }
+  }
+  let settings = await fetchSettings();
+  const idleMsOf = (s) => Math.max(10, idleOverride ? parseInt(idleOverride, 10) : s.idle_seconds) * 1000;
+
+  let agents;
+  try { agents = await cpFetch('/api/chat/agents'); } catch (e) { return; }
+  const enabled = agents.filter((a) => a.enabled);
+  if (!agentId) {
+    const pick = (settings.prefer_local && enabled.find((a) => a.local))
+      || enabled.find((a) => a.kind === 'claude') || enabled[0];
+    agentId = pick && pick.id;
+  }
+  if (!agentId) {
+    console.error('❌ 연결된 에이전트가 없습니다. 웹 /manage/chat 에서 claude 등을 먼저 연결하세요.');
+    process.exit(1);
+  }
+
+  const history = [];
+  let busy = false;
+  let idleTimer = null;
+  let closed = false;
+
+  const rl = readline.createInterface({
+    input: process.stdin, output: process.stdout, prompt: '\x1b[36m› \x1b[0m',
+  });
+  const schedule = () => { clearTimeout(idleTimer); idleTimer = setTimeout(onIdle, idleMsOf(settings)); };
+
+  async function onIdle() {
+    if (closed || busy) { if (!closed) schedule(); return; }
+    // GUI에서 끄면 즉시 반영: 매 유휴 주기마다 설정 재확인
+    settings = await fetchSettings();
+    if (!settings.enabled) { schedule(); return; } // 기능 OFF면 역질문하지 않음
+    busy = true;
+    process.stdout.write('\r\x1b[K');
+    const stop = spinner('\x1b[35m🤔 생각 중 ');
+    try {
+      const d = await cpFetch('/api/companion/nudge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ history, agent_id: agentId }),
+      });
+      stop();
+      process.stdout.write('\x1b[0m');
+      if (d.ok && d.question) {
+        console.log(`\x1b[35m🤔 ${d.question}\x1b[0m`);
+        history.push({ role: 'assistant', content: d.question });
+      }
+    } catch (e) {
+      stop();
+    }
+    busy = false;
+    rl.prompt(true);
+    schedule();
+  }
+
+  async function reply(text) {
+    history.push({ role: 'user', content: text });
+    busy = true;
+    let acc = '';
+    process.stdout.write('\x1b[90m');
+    try {
+      await cpStream('/api/chat/stream',
+        { agent_id: agentId, message: text, history: history.slice(0, -1) },
+        (ev) => {
+          if (ev.type === 'chunk') { acc += ev.text || ''; process.stdout.write(ev.text || ''); }
+          else if (ev.type === 'error') { process.stdout.write(`\n\x1b[31m[오류] ${ev.error}\x1b[0m`); }
+        });
+    } catch (e) {
+      process.stdout.write(`\n\x1b[31m${e.message} — 백엔드(:8787) 확인\x1b[0m`);
+    }
+    process.stdout.write('\x1b[0m\n');
+    if (acc.trim()) history.push({ role: 'assistant', content: acc });
+    busy = false;
+  }
+
+  rl.on('line', async (line) => {
+    const text = line.trim();
+    clearTimeout(idleTimer);
+    if (!text) { rl.prompt(); schedule(); return; }
+    if (text === '/exit' || text === '/quit') { rl.close(); return; }
+    await reply(text);
+    rl.prompt();
+    schedule();
+  });
+  rl.on('close', () => {
+    closed = true;
+    clearTimeout(idleTimer);
+    console.log('\n👋 companion 종료');
+    process.exit(0);
+  });
+
+  const onOff = settings.enabled ? `유휴 ${Math.round(idleMsOf(settings) / 1000)}s` : '\x1b[33m역질문 OFF\x1b[0m';
+  console.log(`\x1b[1m🤝 NoSlip Companion\x1b[0m  (에이전트: ${agentId}, ${onOff}${settings.prefer_local ? ', 로컬우선' : ''})`);
+  console.log('\x1b[90m가만히 있으면 에이전트가 먼저 역질문을 던집니다(웹 /manage/companion 에서 ON/OFF). /exit 로 종료.\x1b[0m\n');
+  rl.prompt();
+  schedule();
+  return new Promise(() => {}); // close 시 process.exit 까지 유지
+}
+
+// ───────────────────────── Token (사용량 토큰화) ─────────────────────────
+const ACTION_LABEL_KO = {
+  agent_run: '에이전트 실행', purpose_plan: 'Purpose 전략', squad_run_per_bot: '스쿼드(봇당)',
+  federation_propose: '연합 역제안', federation_run_per_bot: '연합 실행(봇당)', companion_nudge: '동반 역질문',
+};
+
+async function runToken(argv) {
+  const sub = argv[1] || 'balance';
+
+  if (sub === 'balance' || sub === 'status') {
+    const a = await cpFetch('/api/token/account?limit=8');
+    console.log(`\n💎 \x1b[1mNSQ 잔액: ${a.balance}\x1b[0m  \x1b[90m(누적 사용 ${a.spent} / 지급 ${a.granted})\x1b[0m`);
+    console.log('\x1b[90m최근 원장:\x1b[0m');
+    a.entries.forEach(e => {
+      const sign = e.type === 'grant' ? '\x1b[32m+' : '\x1b[90m-';
+      const name = e.type === 'grant' ? (e.note || '지급') : (ACTION_LABEL_KO[e.action] || e.action);
+      console.log(`  ${sign}${e.nsq}\x1b[0m  ${name}`);
+    });
+    process.exit(0);
+  }
+
+  if (sub === 'grant') {
+    const amt = parseFloat(argv[2]);
+    if (!(amt > 0)) { console.error('❌ 사용법: noslip token grant <NSQ>'); process.exit(1); }
+    const r = await cpFetch('/api/token/grant', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: amt }),
+    });
+    console.log(`\n✅ ${amt} NSQ 지급 → 잔액 ${r.balance}`);
+    process.exit(0);
+  }
+
+  if (sub === 'usage') {
+    const u = await cpFetch('/api/token/usage');
+    console.log('\n📊 액션별 사용량(NSQ)');
+    if (!u.by_action.length) console.log('  (사용 내역 없음)');
+    u.by_action.forEach(x => console.log(`  • ${ACTION_LABEL_KO[x.action] || x.action}: ${x.count}회, ${x.nsq} NSQ`));
+    process.exit(0);
+  }
+
+  if (sub === 'config') {
+    const c = await cpFetch('/api/token/config');
+    console.log(`\n⚙️  단가: ${c.nsq_per_unit} NSQ/unit · 초기지급 ${c.initial_grant} NSQ`);
+    console.log('요금표(units):');
+    Object.entries(c.actions).forEach(([k, v]) => console.log(`  • ${ACTION_LABEL_KO[k] || k}: ${v} units = ${(v * c.nsq_per_unit).toFixed(4)} NSQ`));
+    process.exit(0);
+  }
+
+  console.error(`❌ 알 수 없는 token 하위명령: ${sub} (balance | grant <NSQ> | usage | config)`);
+  process.exit(1);
 }
 
 main().catch(err => {

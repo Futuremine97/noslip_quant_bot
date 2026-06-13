@@ -137,6 +137,8 @@ class ChatAgentBase(BaseModel):
     cwd: Optional[str] = None
     timeout_s: int = Field(default=120, ge=1, le=1800)
     enabled: bool = True
+    # 완전 로컬에서 추론되는 모델(예: ollama/llama 등)이면 True → companion이 우선 선택
+    local: bool = False
 
 
 class ChatAgentCreate(ChatAgentBase):
@@ -165,6 +167,7 @@ class ChatAgentUpdate(BaseModel):
     cwd: Optional[str] = None
     timeout_s: Optional[int] = None
     enabled: Optional[bool] = None
+    local: Optional[bool] = None
 
 
 class ChatAgent(ChatAgentBase):
