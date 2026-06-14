@@ -55,8 +55,14 @@
     "productName": "NoSlipQuant",
     "asar": false,
     "icon": "electron/icon.png",
+    "publish": {
+      "provider": "github",
+      "owner": "Futuremine97",
+      "repo": "noslip_quant_bot"
+    },
     "mac": {
       "category": "public.app-category.finance",
+      "identity": null,
       "target": [
         "dmg"
       ]

@@ -10,14 +10,17 @@ permissions:
   contents: write
 
 env:
-  # next build placeholders (real values live in the user's local .env)
   NEXT_PUBLIC_TOSS_CLIENT_KEY: "test_ck_placeholder"
   NEXT_TELEMETRY_DISABLED: "1"
 
 jobs:
   build-mac:
-    name: Build macOS dmg
+    name: Build macOS dmg (arm64 + x64)
     runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      # 코드서명/공증 미적용 — CI에서 자동 서명 탐색을 끈다(빌드 실패 방지).
+      CSC_IDENTITY_AUTODISCOVERY: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,16 +31,18 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Build Next.js production bundle
         run: npm run build
-      - name: Package dmg
-        run: npx electron-builder --mac --publish never
+      - name: Package dmg (Apple Silicon + Intel)
+        run: npx electron-builder --mac dmg --arm64 --x64 --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: mac-dmg
           path: dist-desktop/*.dmg
+          if-no-files-found: error
 
   build-win:
     name: Build Windows exe
     runs-on: windows-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,11 +54,12 @@ jobs:
       - name: Build Next.js production bundle
         run: npm run build
       - name: Package exe
-        run: npx electron-builder --win --publish never
+        run: npx electron-builder --win nsis --x64 --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: win-exe
           path: dist-desktop/*.exe
+          if-no-files-found: error
 
   release:
     name: Publish GitHub Release
@@ -72,19 +78,22 @@ jobs:
             artifacts/win-exe/*.exe
           generate_release_notes: true
           body: |
-            ## No Slip Quant Desktop
+            ## NoSlip Quant Desktop
+
+            로컬에 설치해서 일반 앱처럼 실행하는 데스크톱 빌드입니다.
 
             | OS | 파일 | 설치 |
             |---|---|---|
-            | macOS (Apple Silicon/Intel) | `.dmg` | 열어서 Applications로 드래그 |
-            | Windows 10/11 (x64) | `.exe` | 설치 마법사 실행 |
+            | macOS (Apple Silicon) | `*-arm64.dmg` | 열어서 Applications로 드래그 |
+            | macOS (Intel) | `*-x64.dmg` | 열어서 Applications로 드래그 |
+            | Windows 10/11 (x64) | `*.exe` | 설치 마법사 실행 |
 
-            앱 실행 시 내장된 Next.js 대시보드 + API 서버가 자동 시작됩니다
-            (별도 터미널 불필요). 서버 준비 전에는 대기 화면이 표시되고
-            3초 간격으로 자동 연결됩니다.
+            실행하면 내장 Next.js 대시보드 + API 서버가 자동 시작되고,
+            메뉴바(트레이) 아이콘에서 터미널 통합 제어·관리 화면에 접근할 수 있습니다.
 
-            - 포트 변경: `NOSLIP_PORT` / 원격 서버: `NOSLIP_DASHBOARD_URL`
-            - 트레이딩 봇·텔레그램 데몬(Python)은 별도 실행 (README 참고)
+            - 포트 변경: `NOSLIP_PORT` / 원격 대시보드: `NOSLIP_DASHBOARD_URL`
+            - Python 봇/데몬은 별도 실행 (README 참고)
 
-            ⚠️ 코드서명 미적용: macOS는 첫 실행 시 우클릭→열기,
-            Windows는 SmartScreen에서 "추가 정보→실행"이 필요할 수 있습니다.
+            ⚠️ **코드서명 미적용**:
+            - macOS: 첫 실행 시 앱을 **우클릭 → 열기**(또는 시스템 설정 → 개인정보 보호 및 보안 → "확인 없이 열기").
+            - Windows: SmartScreen에서 **추가 정보 → 실행**.
