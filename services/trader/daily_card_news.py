@@ -575,8 +575,8 @@ def create_pillow_slide(bg_img, slide_num, total_slides, title, subtitle, bullet
     color_text = (245, 245, 245, 255)
     color_sub = (0, 245, 212, 255)
     color_muted = (156, 163, 175, 255)
-    panel_fill = (15, 20, 25, 210) # dark blue-gray translucent
-    panel_border = (255, 255, 255, 35)
+    panel_fill = (12, 16, 22, 160) # more transparent dark blue-gray translucent for stronger glassmorphism
+    panel_border = (0, 245, 212, 60) # cyan border glow for cyber robotics theme
     
     overlay = Image.new("RGBA", (1080, 1080), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -648,6 +648,28 @@ def create_pillow_slide(bg_img, slide_num, total_slides, title, subtitle, bullet
         outline=panel_border,
         width=2
     )
+    
+    # Draw futuristic corner brackets/ticks for high-tech engineered style
+    tick_len = 16
+    tick_color = (0, 245, 212, 180) # Cyan accent
+    # Top-Left corner ticks
+    draw.line([(card_left - 4, card_top - 4), (card_left - 4 + tick_len, card_top - 4)], fill=tick_color, width=2)
+    draw.line([(card_left - 4, card_top - 4), (card_left - 4, card_top - 4 + tick_len)], fill=tick_color, width=2)
+    # Bottom-Right corner ticks
+    draw.line([(card_right + 4, card_bottom + 4), (card_right + 4 - tick_len, card_bottom + 4)], fill=tick_color, width=2)
+    draw.line([(card_right + 4, card_bottom + 4), (card_right + 4, card_bottom + 4 - tick_len)], fill=tick_color, width=2)
+
+    # Draw category badge at the top-left of the panel (highly popular Instagram infographic style)
+    badge_w, badge_h = 145, 26
+    badge_x = card_left + 35
+    badge_y = card_top - 13
+    draw.rounded_rectangle(
+        [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
+        radius=6,
+        fill=(0, 245, 212, 255)
+    )
+    font_badge = get_font_by_lang(11, index=4, lang=lang)
+    draw.text((badge_x + 14, badge_y + 5), "GLOBAL ROBOTICS", font=font_badge, fill=(10, 15, 20, 255))
     
     # Fonts
     font_bold = get_font_by_lang(44, index=6, lang=lang) # slightly smaller for smaller panels
